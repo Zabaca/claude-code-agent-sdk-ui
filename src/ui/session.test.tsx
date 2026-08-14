@@ -155,6 +155,57 @@ test("a sub-agent's work is attributed to the Thread it belongs to", async () =>
   view.unmount()
 })
 
+test('a Turn that died is not drawn like a Turn that finished', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'first' })
+    fake.frame({ kind: 'settled', result: 'done' })
+    fake.frame({ kind: 'prompt', text: 'second' })
+    fake.frame({ kind: 'failed', subtype: 'error_max_turns', reason: 'ran out of turns' })
+  })
+
+  const [settled, failed] = ended()
+
+  // The whole point: two Turns that ended differently must not read the same.
+  expect(settled).not.toBe(failed)
+  expect(outcomes()).toEqual(['settled', 'failed'])
+  expect(settled).toContain('settled')
+  // And the reason is on screen. `reduce` is already carrying it; a drawing
+  // that throws it away tells a viewer the Turn ended and hides that it died.
+  expect(failed).toContain('failed')
+  expect(failed).toContain('ran out of turns')
+  expect(failed).toContain('error_max_turns')
+  view.unmount()
+})
+
+test('an interrupted Turn reads as an ending, not as an error', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'write a novel' })
+    fake.frame({
+      kind: 'failed',
+      subtype: 'error_during_execution',
+      reason: 'aborted by user',
+      terminalReason: 'aborted_streaming',
+    })
+  })
+
+  expect(outcomes()).toEqual(['interrupted'])
+  const line = ended()[0] ?? ''
+  // A stop the person asked for is not a problem they have: it is not called a
+  // failure and it is not painted like one.
+  expect(line).toContain('interrupted')
+  expect(line).not.toContain('failed')
+  expect(entry(0).style.color).not.toBe('var(--cc-error)')
+  // The runtime's account of the abort still gets read.
+  expect(line).toContain('aborted by user')
+  view.unmount()
+})
+
 test('Enter wills a prompt Event and empties the composer', async () => {
   const fake = fakeSse()
   const wire = recorder()
@@ -306,6 +357,27 @@ function escape(): void {
 function line(tool: string): HTMLElement {
   const found = screen.getByText(tool).closest('details')
   if (!found) throw new Error(`no tool line for ${tool}`)
+  return found
+}
+
+/** What each Turn-ending entry says, in Transcript order. */
+function ended(): string[] {
+  return [...document.querySelectorAll('[data-outcome]')].map((one) =>
+    (one.textContent ?? '').trim(),
+  )
+}
+
+/** Which outcome each ending entry claims, in Transcript order. */
+function outcomes(): (string | undefined)[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-outcome]')].map(
+    (one) => one.dataset['outcome'],
+  )
+}
+
+/** The nth Turn-ending entry, for the one thing worth reading off its style. */
+function entry(at: number): HTMLElement {
+  const found = document.querySelectorAll<HTMLElement>('[data-outcome]')[at]
+  if (!found) throw new Error(`no ending entry at ${at}`)
   return found
 }
 

@@ -2,7 +2,12 @@
 
 import * as React from 'react'
 
-import type { Message, ToolCallMessage } from '../core/transcript.ts'
+import type {
+  Message,
+  OutcomeMessage,
+  ToolCallMessage,
+  TurnOutcome,
+} from '../core/transcript.ts'
 import type { AgentSession } from '../react/session.ts'
 import { ClaudeMessage } from './claude-message.tsx'
 import { ClaudePrompt } from './claude-prompt.tsx'
@@ -132,12 +137,13 @@ function draw(message: Message): React.ReactNode {
       )
     case 'tool-call':
       return <ToolCall message={message} />
+    case 'outcome':
+      return <Outcome message={message} />
     case 'image': // #12
     case 'compacted': // #10
     case 'reset': // #10
     case 'recall': // #10
     case 'hook': // #10
-    case 'outcome': // #10
       return <Undrawn kind={message.kind} />
     default: {
       // Exhaustive at compile time — a kind added to the vocabulary has to be
@@ -164,6 +170,45 @@ function Attributed({ message, children }: { message: Message; children: React.R
       style={{ borderColor: 'var(--cc-rule)' }}
     >
       {children}
+    </div>
+  )
+}
+
+/**
+ * How a Turn ended, where it ended.
+ *
+ * The three outcomes are drawn apart because `reduce` already tells them
+ * apart. Drawn the same they would not be a gap but a claim the screen cannot
+ * back up: a Turn that died would read exactly like one that finished, and the
+ * reason it died — which the Message is carrying — would be thrown away in the
+ * drawing. That is worse than saying nothing.
+ *
+ * Deliberately plain. The divergence markers are their own work; this is only
+ * the part that must not lie.
+ *
+ * `interrupted` is drawn as an ending rather than as an error, and keeps the
+ * runtime's account of the abort: a stop the person asked for is not a problem
+ * they have, but what the runtime said about it is still worth reading.
+ */
+const ENDED: Record<TurnOutcome, string> = {
+  settled: 'Turn settled',
+  interrupted: 'Turn interrupted',
+  failed: 'Turn failed',
+}
+
+function Outcome({ message }: { message: OutcomeMessage }) {
+  const failed = message.outcome === 'failed'
+  const why = failed
+    ? [message.subtype, message.reason].filter((part) => part !== undefined).join(': ')
+    : (message.reason ?? '')
+  return (
+    <div
+      data-outcome={message.outcome}
+      style={{ color: failed ? 'var(--cc-error)' : 'var(--cc-fg-dim)' }}
+    >
+      <span aria-hidden>⏺ </span>
+      {ENDED[message.outcome]}
+      {why === '' ? null : ` — ${why}`}
     </div>
   )
 }

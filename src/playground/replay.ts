@@ -160,12 +160,12 @@ export function prose(text: string, options: { block?: number; thread?: string }
   const thread = options.thread
   const words = text.split(' ')
   const beats: Beat[] = []
-  let so_far = ''
+  let written = ''
   for (const word of words) {
-    so_far = so_far === '' ? word : `${so_far} ${word}`
+    written = written === '' ? word : `${written} ${word}`
     beats.push({
       after: 34,
-      partial: compact<PartialText>({ block, kind: 'text', text: so_far, thread }),
+      partial: compact<PartialText>({ block, kind: 'text', text: written, thread }),
     })
   }
   beats.push({ partial: compact<PartialText>({ block, kind: 'text', text, done: true, thread }) })
