@@ -1,0 +1,303 @@
+import type { Frame } from '../core/frame.ts'
+import type { PartialText } from '../core/partial.ts'
+import type { AgentEventSource, AgentEventSourceFactory, AgentFetch } from '../react/session.ts'
+
+/**
+ * Replay — the playground's other half, and the fourth job the Frame log does.
+ *
+ * The Frame log is already the wire format, the test fixture and the reconnect
+ * mechanism. Here it is a driver: a scripted log played into
+ * `useAgentSession`'s own injectable transport, so the whole surface runs with
+ * no credential, no network and no SDK. A reviewer sees the UI in seconds and
+ * for free.
+ *
+ * It stands in for the transport and for nothing else. `useAgentSession`,
+ * `reduce` and the components are the same ones live mode runs — if replay and
+ * live diverged in code, replay would stop proving anything about live. What
+ * replay substitutes is exactly what the handler substitutes when it is given
+ * a `createQuery`: where the Frames come from.
+ */
+
+/** One thing the script does: a Frame, live text, or a pause before either. */
+export type Beat = {
+  /** How long after the previous beat this one lands. */
+  after?: number
+  /** Retained, and delivered with its index as `id:` — as the handler does. */
+  frame?: Frame
+  /** Live text. No `id:`, so it never moves the resume cursor. */
+  partial?: PartialText
+}
+
+export type ReplayOptions = {
+  /**
+   * How the script waits between beats. The seam a test drives it at: one that
+   * does not wait makes the whole script land in microtasks, with no timers.
+   */
+  wait?: (ms: number) => Promise<void>
+  /** Played as soon as the stream opens, so the screen is never empty. */
+  opening?: Beat[]
+  /** What a prompt Event is answered with. */
+  answer?: (text: string) => Beat[]
+}
+
+export type ReplayTransport = {
+  /** For `useAgentSession({ createEventSource })`. */
+  createEventSource: AgentEventSourceFactory
+  /** For `useAgentSession({ fetch })` — where a willed Event arrives. */
+  fetch: AgentFetch
+  /** The retained log, as the handler keeps it. Index is the `id:`. */
+  log: Frame[]
+  /** Resolves once nothing is being played. */
+  quiet(): Promise<void>
+}
+
+export function replayTransport(options: ReplayOptions = {}): ReplayTransport {
+  const wait = options.wait ?? sleep
+  const opening = options.opening ?? OPENING
+  const answer = options.answer ?? reply
+
+  const log: Frame[] = []
+  const listeners = new Map<string, ((event: { data: string; lastEventId: string }) => void)[]>()
+  let started = false
+  let playing: Promise<void> = Promise.resolve()
+  /** Bumped by an interrupt, which is how a script in flight is cut short. */
+  let epoch = 0
+
+  const emit = (name: string, data: string, id: string): void => {
+    for (const listener of listeners.get(name) ?? []) listener({ data, lastEventId: id })
+  }
+
+  const retain = (frame: Frame): void => {
+    log.push(frame)
+    emit('frame', JSON.stringify(frame), String(log.length - 1))
+  }
+
+  const play = async (beats: Beat[]): Promise<void> => {
+    const mine = epoch
+    for (const beat of beats) {
+      await wait(beat.after ?? 0)
+      // An interrupt landed while this beat was waiting. What the runtime was
+      // about to say is not said, exactly as a real abort would have it.
+      if (epoch !== mine) return
+      if (beat.frame) retain(beat.frame)
+      if (beat.partial) emit('partial', JSON.stringify(beat.partial), '')
+    }
+  }
+
+  /** Queues a script behind whatever is already playing, and reports quiet. */
+  const start = (beats: Beat[]): void => {
+    playing = playing.then(() => play(beats))
+  }
+
+  const createEventSource: AgentEventSourceFactory = () => {
+    const source: AgentEventSource = {
+      addEventListener: (name, listener) => {
+        const registered = listeners.get(name) ?? []
+        registered.push(listener)
+        listeners.set(name, registered)
+      },
+      close: () => listeners.clear(),
+    }
+    // A source the browser opens sends no `Last-Event-ID`, so the whole log
+    // comes down it — which is what a cold reload gets, and what makes a
+    // reload of the playground show the Session it already had.
+    queueMicrotask(() => {
+      for (const [index, frame] of log.entries()) {
+        emit('frame', JSON.stringify(frame), String(index))
+      }
+      if (started) return
+      started = true
+      start(opening)
+    })
+    return source
+  }
+
+  const fetch: AgentFetch = async (_endpoint, init) => {
+    const event = parse(init.body)
+    if (event?.type === 'prompt' && typeof event.text === 'string') {
+      // The person's words are retained first, so the Message the hook put on
+      // screen optimistically is settled by a Frame rather than left beside
+      // one — the same order the handler produces.
+      const text = event.text
+      start([{ frame: { kind: 'prompt', text } }, ...answer(text)])
+      return { ok: true, status: 202 }
+    }
+    if (event?.type === 'interrupt') {
+      epoch += 1
+      // A stop the person asked for is not a failure. The handler retains an
+      // interrupted Turn as settled and keeps `terminalReason`, so replay does
+      // the same rather than inventing a failure nobody had.
+      retain({ kind: 'settled', terminalReason: 'aborted_streaming' })
+      return { ok: true, status: 202 }
+    }
+    return { ok: false, status: 400 }
+  }
+
+  return { createEventSource, fetch, log, quiet: () => playing }
+}
+
+function parse(body: string): { type?: string; text?: unknown } | undefined {
+  try {
+    return JSON.parse(body) as { type?: string; text?: unknown }
+  } catch {
+    return undefined
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// --- the script ------------------------------------------------------------------
+
+/**
+ * A block of prose arriving word by word, then the Frame the handler retains
+ * once the block closes — the same two-step live mode makes, so what replay
+ * shows of streaming is what live does.
+ */
+export function prose(text: string, options: { block?: number; thread?: string } = {}): Beat[] {
+  const block = options.block ?? 0
+  const thread = options.thread
+  const words = text.split(' ')
+  const beats: Beat[] = []
+  let so_far = ''
+  for (const word of words) {
+    so_far = so_far === '' ? word : `${so_far} ${word}`
+    beats.push({
+      after: 34,
+      partial: compact<PartialText>({ block, kind: 'text', text: so_far, thread }),
+    })
+  }
+  beats.push({ partial: compact<PartialText>({ block, kind: 'text', text, done: true, thread }) })
+  beats.push({ frame: compact<Frame>({ kind: 'text', text, thread }) })
+  return beats
+}
+
+/** A tool call, the pause while it runs, and what it answered. */
+export function tool(call: {
+  id: string
+  name: string
+  input: Record<string, unknown>
+  output: string
+  failed?: boolean
+  takes?: number
+}): Beat[] {
+  return [
+    {
+      after: 260,
+      frame: { kind: 'tool-call', id: call.id, name: call.name, input: call.input },
+    },
+    {
+      after: call.takes ?? 700,
+      frame: {
+        kind: 'tool-result',
+        id: call.id,
+        output: call.output,
+        isError: call.failed === true,
+      },
+    },
+  ]
+}
+
+/**
+ * The opening Turn. Scoped to what this ticket covers end to end — prose and
+ * tool calls, in all three of a tool's states — because a replay log that
+ * showed a surface nothing draws yet would be a demo of an absence. Later
+ * tickets add their own case here.
+ */
+export const OPENING: Beat[] = [
+  { frame: { kind: 'session', sessionId: 'replay-0001' } },
+  {
+    frame: {
+      kind: 'harness',
+      model: 'claude-opus-4',
+      cwd: '/repo',
+      permissionMode: 'bypassPermissions',
+      version: '2.1.206',
+      tools: ['Read', 'Edit', 'Bash'],
+    },
+  },
+  {
+    frame: {
+      kind: 'commands',
+      commands: [
+        { name: 'commit', description: 'Commit the working tree' },
+        { name: 'effort', description: 'Change how hard the model thinks' },
+      ],
+    },
+  },
+  { after: 260, frame: { kind: 'prompt', text: 'the suite is flaky — find out why' } },
+  ...prose('Reading the test first.'),
+  ...tool({
+    id: 'toolu_read',
+    name: 'Read',
+    input: { file_path: '/repo/src/core/reduce.test.ts' },
+    output: "import { test } from 'bun:test'\n\ntest('reduce keeps order', () => {\n  …\n})",
+    takes: 520,
+  }),
+  ...prose('It shells out for the fixture, so it depends on the clock. Running it.', {
+    block: 1,
+  }),
+  ...tool({
+    id: 'toolu_bash_1',
+    name: 'Bash',
+    input: { command: 'bun test src/core/reduce.test.ts' },
+    output: '1 fail\nreduce keeps order — expected 3, got 2',
+    failed: true,
+    takes: 900,
+  }),
+  ...prose('There it is. The fixture is regenerated per run; pinning it.', { block: 2 }),
+  ...tool({
+    id: 'toolu_edit',
+    name: 'Edit',
+    input: { file_path: '/repo/src/core/reduce.test.ts' },
+    output: 'Applied 1 edit to /repo/src/core/reduce.test.ts',
+    takes: 420,
+  }),
+  ...tool({
+    id: 'toolu_bash_2',
+    name: 'Bash',
+    input: { command: 'bun test src/core/reduce.test.ts' },
+    output: '3 pass\n0 fail',
+    takes: 800,
+  }),
+  ...prose('Pinned, and the suite is green.', { block: 3 }),
+  { frame: { kind: 'settled', result: 'Pinned the fixture; the suite is green.', turns: 1 } },
+  { frame: { kind: 'cost', usd: 0.0412, turns: 1, durationMs: 8400 } },
+]
+
+/**
+ * What a prompt typed into the replaying playground is answered with. It quotes
+ * the words back, because the point being demonstrated is that the composer
+ * reaches the runtime — not that the runtime is clever.
+ */
+export function reply(text: string): Beat[] {
+  return [
+    ...prose(`Replaying an answer to “${text}”. Nothing here talks to a model.`),
+    ...tool({
+      id: `toolu_replay_${counter()}`,
+      name: 'Read',
+      input: { file_path: '/repo/README.md' },
+      output: '# claude-code-agent-sdk-ui\n\nThe layer between the SDK and a rendered UI.',
+      takes: 600,
+    }),
+    ...prose('That is the whole of replay: a Frame log, played.', { block: 1 }),
+    { frame: { kind: 'settled', result: 'Replayed.', turns: 1 } },
+  ]
+}
+
+let replies = 0
+/** Keeps two answers' tool calls from sharing a `tool_use` id. */
+function counter(): number {
+  replies += 1
+  return replies
+}
+
+/** Drops keys whose value is missing, which `exactOptionalPropertyTypes` wants. */
+function compact<T extends object>(value: { [K in keyof T]: T[K] | undefined }): T {
+  const out: Record<string, unknown> = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry !== undefined) out[key] = entry
+  }
+  return out as T
+}

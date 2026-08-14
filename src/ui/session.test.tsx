@@ -38,6 +38,10 @@ test('a tool call is a visible line the moment it starts, and reads as pending',
   expect(screen.getByText('Read')).toBeDefined()
   expect(screen.getByText('/repo/src/a.ts')).toBeDefined()
   expect(line('Read').dataset['status']).toBe('pending')
+  // Written where the result will go, not only announced: a call handed a
+  // result it does not have yet draws a blank line there and says "pending"
+  // to a screen reader alone.
+  expect(visible('Read')).toContain('pending')
 
   await act(async () => {
     fake.frame({
@@ -99,14 +103,14 @@ test('prose still being written is on screen before its Frame exists', async () 
     fake.partial({ block: 0, kind: 'text', text: 'Hello there' })
   })
   // Replace, never append: the handler sends the whole block each time.
-  expect(screen.queryByText('Hel')).toBeNull()
+  expect(there(screen.queryByText('Hel'))).toBe(false)
   expect(screen.getByText('Hello there')).toBeDefined()
 
   await act(async () => {
     fake.frame({ kind: 'text', text: 'Hello there' })
   })
   // The Frame takes the live copy's place rather than doubling it.
-  expect(screen.getAllByText('Hello there')).toHaveLength(1)
+  expect(screen.queryAllByText('Hello there').length).toBe(1)
   view.unmount()
 })
 
@@ -194,7 +198,7 @@ test('the working line is on screen only while the Turn runs', async () => {
   const fake = fakeSse()
   const view = await mount(fake)
 
-  expect(screen.queryByRole('status')).toBeNull()
+  expect(there(screen.queryByRole('status'))).toBe(false)
 
   await act(async () => {
     fake.frame({ kind: 'prompt', text: 'write a novel' })
@@ -204,7 +208,7 @@ test('the working line is on screen only while the Turn runs', async () => {
   await act(async () => {
     fake.frame({ kind: 'settled', result: 'done' })
   })
-  expect(screen.queryByRole('status')).toBeNull()
+  expect(there(screen.queryByRole('status'))).toBe(false)
   view.unmount()
 })
 
@@ -224,7 +228,7 @@ test('the mode line reports what the runtime loaded, and is not a control', asyn
   // ADR-0001 is enforced by the wire: an Event is a prompt or an interrupt, so
   // no Event can carry a mode change. A mode line that could be activated
   // would change what the composer says without changing what runs.
-  expect(screen.getByText('plan mode on').closest('button')).toBeNull()
+  expect(there(screen.getByText('plan mode on').closest('button'))).toBe(false)
   view.unmount()
 })
 
@@ -233,7 +237,7 @@ test('the effort chip is a control, because effort is the composer’s own', asy
   const view = await mount(fake)
 
   const chip = screen.getByText(/xhigh/).closest('button')
-  expect(chip).not.toBeNull()
+  expect(there(chip)).toBe(true)
   await act(async () => chip?.click())
   expect(screen.getByText(/max/)).toBeDefined()
   view.unmount()
@@ -279,6 +283,13 @@ function line(tool: string): HTMLElement {
   const found = screen.getByText(tool).closest('details')
   if (!found) throw new Error(`no tool line for ${tool}`)
   return found
+}
+
+/** What a tool's collapsed line shows, minus what only a reader would hear. */
+function visible(tool: string): string {
+  const summary = line(tool).querySelector('summary')?.cloneNode(true) as HTMLElement | null
+  for (const hidden of summary?.querySelectorAll('[class~="cc:sr-only"]') ?? []) hidden.remove()
+  return summary?.textContent ?? ''
 }
 
 /** The Transcript entry a tool's line sits in — where its Thread is marked. */
@@ -334,3 +345,13 @@ function recorder(status = 202): { posted: Posted[]; fetch: AgentFetch } {
 }
 
 export { recorder }
+
+/**
+ * Whether something is on screen, as a boolean. Asserted on a value rather
+ * than on the node itself because a failing assertion that has to print a DOM
+ * element walks a graph with cycles in it and never comes back — a suite that
+ * hangs where it should have reported.
+ */
+function there(node: Element | null | undefined): boolean {
+  return node !== null && node !== undefined
+}
