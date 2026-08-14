@@ -17,7 +17,10 @@ willed.
 _Avoid_: Action, command, message
 
 **Transcript**:
-The ordered list of Messages a viewer sees.
+What a viewer needs in order to render: the ordered list of Messages, plus the
+Session-wide facts — harness, meters, commands, Turn status — that are the
+runtime's latest word rather than an entry in the order. Its `messages` field is
+the ordered list of Messages a viewer sees.
 _Avoid_: Timeline, feed, history, log
 
 **Message**:
