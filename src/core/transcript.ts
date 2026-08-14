@@ -45,6 +45,13 @@ export type Transcript = {
  * the Transcript, so they are state, not Messages. Each is its Frame minus the
  * discriminator, so a field added to the Frame vocabulary reaches the Transcript
  * without anyone having to remember to copy it across.
+ *
+ * The price is deliberate, and is not a precedent for the Messages: these four
+ * take the wire's field names with them, so `apiKeySource` and `outputStyle`
+ * reach a render type verbatim. The spec's "emit everything, losslessly" rule
+ * governs the Frame vocabulary alone. It is paid here because these four are
+ * pass-through readings a renderer displays rather than reads — and it is not
+ * paid by any Message, each of which is named for what a viewer sees.
  */
 export type Harness = Omit<HarnessFrame, 'kind'>
 export type ContextUsage = Omit<ContextFrame, 'kind'>

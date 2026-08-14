@@ -149,10 +149,75 @@ describe('replay', () => {
     expect(JSON.stringify(golden)).toBe(before)
   })
 
-  test('reaches the same Transcript whether the log arrives whole or in two halves', () => {
-    const half = Math.floor(golden.length / 2)
-    const resumed = reduce([...golden.slice(0, half), ...golden.slice(half)])
+  /**
+   * What a Message is, as against what it currently says. A Frame arriving can
+   * change what a Message says — prose grows, a call stops being pending — but
+   * it must never change which Message sits at an index.
+   */
+  function placements(frames: Frame[]): string[] {
+    return reduce(frames).messages.map((message) =>
+      'id' in message && message.id !== undefined ? `${message.kind}:${message.id}` : message.kind,
+    )
+  }
 
-    expect(resumed).toEqual(reduce(golden))
+  /** What a client holds after each Frame of the log has arrived. */
+  const growth = golden.map((_frame, at) => placements(golden.slice(0, at + 1)))
+
+  test('never moves a Message it has already placed, however much of the log has arrived', () => {
+    // A client re-reduces as each Frame arrives. Every one of those Transcripts
+    // must extend the last rather than rearrange it: if an index meant one
+    // Message now and a different one after the next Frame, resuming an SSE
+    // stream at a Frame index would land a viewer somewhere nobody was.
+    const shifted = growth.filter((later, at) =>
+      (growth[at - 1] ?? []).some((placement, index) => later[index] !== placement),
+    )
+
+    expect(shifted).toEqual([])
+    // Non-vacuity: the log really does build the whole Transcript this way.
+    expect(growth.at(-1)).toEqual(placements(golden))
+    expect(growth.at(-1)).toHaveLength(20)
+  })
+
+  test('patches a Message in place rather than appending a second one', () => {
+    // The half of append-and-patch-the-tail the test above cannot see: without
+    // it, "never moves a Message" would hold trivially by appending forever. A
+    // patch is a Frame that leaves the placements alone and still changes what
+    // a Message says — which is what tells it apart from a Frame that only
+    // moves the Session's own state along.
+    const said = golden.map((_frame, at) => JSON.stringify(reduce(golden.slice(0, at + 1)).messages))
+    const patches = golden.filter((_frame, at) => {
+      const before = growth[at - 1] ?? []
+      return at > 0 && before.length === growth[at]?.length && said[at] !== said[at - 1]
+    })
+
+    expect(patches.map((frame) => frame.kind).sort()).toEqual([
+      'hook',
+      'hook',
+      'text',
+      'tool-result',
+      'tool-result',
+      'tool-result',
+      'tool-result',
+    ])
+  })
+
+  test('takes a log that starts mid-Session without inventing what it missed', () => {
+    // What a client gets when the log is truncated before the calls: results
+    // answering Messages that are not there. They attach to nothing rather than
+    // conjuring a call nobody saw start.
+    const from = golden.findIndex((frame) => frame.kind === 'tool-result')
+    const tail = golden.slice(from)
+    const opened = tail.flatMap((frame) => (frame.kind === 'tool-call' ? [frame.id] : []))
+    const orphaned = tail.filter(
+      (frame) => frame.kind === 'tool-result' && !opened.includes(frame.id),
+    )
+
+    // Non-vacuity: this slice really does answer calls it never saw open.
+    expect(orphaned.length).toBeGreaterThan(0)
+    expect(
+      reduce(tail)
+        .messages.filter((message) => message.kind === 'tool-call')
+        .map((call) => call.id),
+    ).toEqual(opened)
   })
 })
