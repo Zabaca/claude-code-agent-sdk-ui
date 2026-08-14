@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 
 import type { Frame } from '../core/frame.ts'
 import { reduce } from '../core/reduce.ts'
-import type { Message, Transcript } from '../core/transcript.ts'
+import type { Message, ReasoningMessage, TextMessage, Transcript } from '../core/transcript.ts'
 import type { AgentEvent, PartialText } from '../server/handler.ts'
 import type { ClaudeEffort, ClaudeMode } from '../ui/claude-prompt.tsx'
 
@@ -97,7 +97,13 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     // written.
     for (const block of state.live) {
       if (block.kind === 'reasoning' && !reasoning) continue
-      messages.push(compact<Message>({ kind: block.kind, text: block.text, thread: block.thread }))
+      messages.push(
+        compact<TextMessage | ReasoningMessage>({
+          kind: block.kind,
+          text: block.text,
+          thread: block.thread,
+        }),
+      )
     }
     for (const sent of state.sent) messages.push({ kind: 'prompt', text: sent.text })
     if (state.sent.length === 0) return { ...reduced, messages }
@@ -277,6 +283,8 @@ function step(state: SessionState, arrival: Arrival): SessionState {
       return { ...state, live }
     }
     case 'sent': {
+      // The last refusal stops being worth reporting the moment fresh words are
+      // on their way, so it is dropped rather than left standing.
       const { error, ...rest } = state
       return { ...rest, sent: [...state.sent, { at: arrival.at, text: arrival.text }] }
     }
@@ -306,12 +314,12 @@ function step(state: SessionState, arrival: Arrival): SessionState {
  * Frame for a block the runtime never completed, so a reload would not show it
  * either; what is on screen follows the log rather than outliving it.
  */
-function retire(live: readonly Live[], frame: Frame): Live[] {
-  if (live.length === 0) return live as Live[]
+function retire(live: Live[], frame: Frame): Live[] {
+  if (live.length === 0) return live
   if (frame.kind === 'settled' || frame.kind === 'failed') return []
-  if (frame.kind !== 'text' && frame.kind !== 'reasoning') return live as Live[]
+  if (frame.kind !== 'text' && frame.kind !== 'reasoning') return live
   const at = live.findIndex((one) => one.kind === frame.kind && one.thread === frame.thread)
-  if (at === -1) return live as Live[]
+  if (at === -1) return live
   return [...live.slice(0, at), ...live.slice(at + 1)]
 }
 
@@ -322,12 +330,12 @@ function retire(live: readonly Live[], frame: Frame): Live[] {
  * did not write, whether the runtime wrote it or a peer asked for it, settles
  * nothing.
  */
-function settle(sent: readonly Sent[], frame: Frame): Sent[] {
-  if (sent.length === 0) return sent as Sent[]
-  if (frame.kind !== 'prompt') return sent as Sent[]
-  if (frame.synthetic === true || frame.origin !== undefined) return sent as Sent[]
+function settle(sent: Sent[], frame: Frame): Sent[] {
+  if (sent.length === 0) return sent
+  if (frame.kind !== 'prompt') return sent
+  if (frame.synthetic === true || frame.origin !== undefined) return sent
   const at = sent.findIndex((one) => one.text === frame.text)
-  if (at === -1) return sent as Sent[]
+  if (at === -1) return sent
   return [...sent.slice(0, at), ...sent.slice(at + 1)]
 }
 

@@ -141,6 +141,31 @@ test('the same words sent twice stay two Messages', async () => {
   ])
 })
 
+test('a prompt nobody at the keyboard wrote settles nothing of theirs', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const session = await mount(fake, { fetch: wire.fetch })
+
+  await act(async () => {
+    session.current.send('carry on')
+    session.current.send('carry on')
+  })
+
+  await act(async () => {
+    // The runtime's own words, and a peer's, that happen to read the same. A
+    // Turn the person did not start must not stand in for one they did.
+    fake.frame({ kind: 'prompt', text: 'carry on', synthetic: true })
+    fake.frame({ kind: 'prompt', text: 'carry on', origin: { kind: 'discord', from: 'someone' } })
+  })
+
+  expect(session.current.transcript.messages).toEqual([
+    { kind: 'prompt', text: 'carry on', synthetic: true },
+    { kind: 'prompt', text: 'carry on', origin: { kind: 'discord', from: 'someone' } },
+    { kind: 'prompt', text: 'carry on' },
+    { kind: 'prompt', text: 'carry on' },
+  ])
+})
+
 test('a prompt the handler refuses is taken back off the Transcript', async () => {
   const fake = fakeSse()
   const wire = recorder(400)
@@ -151,6 +176,33 @@ test('a prompt the handler refuses is taken back off the Transcript', async () =
   expect(session.current.transcript.messages).toEqual([])
   expect(session.current.transcript.turn).toEqual({ status: 'idle' })
   expect(session.current.error).toBe('the handler refused the prompt Event: 400')
+})
+
+test('an interrupt that never reached the handler is said, not swallowed', async () => {
+  const fake = fakeSse()
+  const session = await mount(fake, {
+    fetch: () => Promise.reject(new Error('the network went away')),
+  })
+
+  await act(async () => session.current.interrupt())
+
+  expect(session.current.error).toBe('the network went away')
+})
+
+test('a caller who builds a transport each render does not restart the stream', async () => {
+  const fake = fakeSse()
+  const view = renderHook(() =>
+    useAgentSession({ endpoint, createEventSource: (url) => fake.createEventSource(url) }),
+  )
+  await settle()
+
+  view.rerender()
+  view.rerender()
+  await settle()
+
+  // A fresh closure every render is not a reason to drop the stream and open
+  // another — that would replay the whole log on every keystroke.
+  expect(fake.sources).toHaveLength(1)
 })
 
 test('empty words start no Turn', async () => {
@@ -365,6 +417,30 @@ test('a block still being written is not the one a Frame settles', async () => {
   expect(session.current.transcript.messages).toEqual([{ kind: 'text', text: 'First.Second.' }])
 })
 
+test("a Thread's live text is its own, not the agent's", async () => {
+  const fake = fakeSse()
+  const session = await mount(fake)
+
+  await act(async () => {
+    // Both are block 0. A block is identified by its Thread as well as its
+    // index, or a sub-agent's prose overwrites the agent's.
+    fake.partial({ block: 0, kind: 'text', text: 'Main says' })
+    fake.partial({ block: 0, kind: 'text', text: 'Sub says', thread: 'call-1' })
+  })
+
+  expect(session.current.transcript.messages).toEqual([
+    { kind: 'text', text: 'Main says' },
+    { kind: 'text', text: 'Sub says', thread: 'call-1' },
+  ])
+
+  await act(async () => fake.frame({ kind: 'text', text: 'Sub says.', thread: 'call-1' }))
+
+  expect(session.current.transcript.messages).toEqual([
+    { kind: 'text', text: 'Sub says.', thread: 'call-1' },
+    { kind: 'text', text: 'Main says' },
+  ])
+})
+
 test('live text does not outlive the Turn that was writing it', async () => {
   const fake = fakeSse()
   const session = await mount(fake)
@@ -386,12 +462,39 @@ test('live text does not outlive the Turn that was writing it', async () => {
   ])
 })
 
+test('a Frame settles the block it is the whole of, not one of another kind', async () => {
+  const fake = fakeSse()
+  const session = await mount(fake, { reasoning: true })
+
+  await act(async () => {
+    // Deliberation opened first and is still being written when prose starts.
+    fake.partial({ block: 0, kind: 'reasoning', text: 'Hmm, maybe' })
+    fake.partial({ block: 1, kind: 'text', text: 'Yes' })
+  })
+
+  expect(session.current.transcript.messages).toEqual([
+    { kind: 'reasoning', text: 'Hmm, maybe' },
+    { kind: 'text', text: 'Yes' },
+  ])
+
+  await act(async () => fake.frame({ kind: 'text', text: 'Yes.' }))
+
+  expect(session.current.transcript.messages).toEqual([
+    { kind: 'text', text: 'Yes.' },
+    { kind: 'reasoning', text: 'Hmm, maybe' },
+  ])
+})
+
 test('deliberation stays out of the Transcript, live or retained, unless asked for', async () => {
   const fake = fakeSse()
   const quiet = await mount(fake)
 
+  await act(async () => fake.partial({ block: 0, kind: 'reasoning', text: 'Let me think' }))
+
+  // Still being written, and still not on screen.
+  expect(quiet.current.transcript.messages).toEqual([])
+
   await act(async () => {
-    fake.partial({ block: 0, kind: 'reasoning', text: 'Let me think' })
     fake.frame({ kind: 'reasoning', text: 'Let me think about it' })
     fake.frame({ kind: 'text', text: 'Yes.' })
   })
