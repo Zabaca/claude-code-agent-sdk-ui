@@ -16,6 +16,9 @@ export type Frame =
   | ToolCallFrame
   | ToolResultFrame
   | ImageFrame
+  | SettledFrame
+  | FailedFrame
+  | CostFrame
 
 /** The Session's id, emitted the instant `init` arrives (ADR-0002). */
 export type SessionFrame = {
@@ -116,6 +119,49 @@ export type ImageFrame = {
   toolCallId?: string
   thread?: string
 }
+
+/** The Turn finished as asked. */
+export type SettledFrame = {
+  kind: 'settled'
+  result?: string
+  turns?: number
+  durationMs?: number
+  stopReason?: string
+  terminalReason?: string
+}
+
+/** The Turn stopped short. An answer that stops is not an answer that finished. */
+export type FailedFrame = {
+  kind: 'failed'
+  /** The result subtype the runtime reported, e.g. `error_max_turns`. */
+  subtype: string
+  /** Why it stopped, in the runtime's own words where it gave any. */
+  reason: string
+  turns?: number
+  durationMs?: number
+  terminalReason?: string
+}
+
+/** What the Turn spent. Emitted whether the Turn settled or failed. */
+export type CostFrame = {
+  kind: 'cost'
+  usd: number
+  turns?: number
+  durationMs?: number
+  /** Main agent loop only. */
+  usage?: TokenUsage
+  /** Every model called through the query pipeline, sub-agents included. */
+  byModel?: Record<string, ModelCost>
+}
+
+export type TokenUsage = {
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadInputTokens?: number
+  cacheCreationInputTokens?: number
+}
+
+export type ModelCost = TokenUsage & { costUsd?: number }
 
 export type SlashCommandInfo = {
   name: string

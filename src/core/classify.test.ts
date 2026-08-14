@@ -336,3 +336,89 @@ describe('the person speaking, and tools answering', () => {
     ])
   })
 })
+
+describe('the Turn ending', () => {
+  test('settles a successful result with what it answered', () => {
+    const frames = classify({
+      type: 'result',
+      subtype: 'success',
+      session_id: 'sess-1',
+      result: 'Done.',
+      num_turns: 3,
+      duration_ms: 4200,
+      duration_api_ms: 3900,
+      stop_reason: 'end_turn',
+      total_cost_usd: 0.0412,
+      usage: { input_tokens: 120, output_tokens: 45 },
+    })
+
+    expect(frames).toContainEqual({
+      kind: 'settled',
+      result: 'Done.',
+      turns: 3,
+      durationMs: 4200,
+      stopReason: 'end_turn',
+    })
+    expect(frames.map((frame) => frame.kind)).not.toContain('failed')
+  })
+
+  test('fails a result whose subtype is not success, with its reason', () => {
+    const frames = classify({
+      type: 'result',
+      subtype: 'error_max_turns',
+      session_id: 'sess-1',
+      is_error: true,
+      num_turns: 40,
+      duration_ms: 90000,
+      errors: ['Reached the maximum number of turns'],
+      terminal_reason: 'max_turns',
+      total_cost_usd: 1.5,
+    })
+
+    expect(frames).toContainEqual({
+      kind: 'failed',
+      subtype: 'error_max_turns',
+      reason: 'Reached the maximum number of turns',
+      turns: 40,
+      durationMs: 90000,
+      terminalReason: 'max_turns',
+    })
+    expect(frames.map((frame) => frame.kind)).not.toContain('settled')
+  })
+
+  test('falls back to the subtype when a failure carries no reason', () => {
+    const frames = classify({
+      type: 'result',
+      subtype: 'error_during_execution',
+      session_id: 'sess-1',
+      total_cost_usd: 0,
+    })
+
+    expect(frames).toContainEqual({
+      kind: 'failed',
+      subtype: 'error_during_execution',
+      reason: 'error_during_execution',
+    })
+  })
+
+  test('emits the cost of the Turn separately from its outcome', () => {
+    const frames = classify({
+      type: 'result',
+      subtype: 'success',
+      session_id: 'sess-1',
+      result: 'Done.',
+      total_cost_usd: 0.0412,
+      usage: { input_tokens: 120, output_tokens: 45, cache_read_input_tokens: 900 },
+      modelUsage: {
+        'claude-opus-4': { costUSD: 0.0412, inputTokens: 120, outputTokens: 45 },
+      },
+    })
+
+    expect(frames).toContainEqual({
+      kind: 'cost',
+      usd: 0.0412,
+      usage: { inputTokens: 120, outputTokens: 45, cacheReadInputTokens: 900 },
+      byModel: { 'claude-opus-4': { costUsd: 0.0412, inputTokens: 120, outputTokens: 45 } },
+    })
+  })
+})

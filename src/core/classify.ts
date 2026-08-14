@@ -1,8 +1,13 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 
 import type {
+  CostFrame,
+  FailedFrame,
   Frame,
   HarnessFrame,
+  ModelCost,
+  SettledFrame,
+  TokenUsage,
   ImageFrame,
   PromptFrame,
   ReasoningFrame,
@@ -37,6 +42,8 @@ export function classify(message: ClassifyInput): Frame[] {
       return agent(m)
     case 'user':
       return person(m)
+    case 'result':
+      return outcome(m)
     default:
       return []
   }
@@ -129,6 +136,84 @@ function person(m: Rec): Frame[] {
         return []
     }
   })
+}
+
+function outcome(m: Rec): Frame[] {
+  const subtype = str(m['subtype'])
+  const turns = num(m['num_turns'])
+  const durationMs = num(m['duration_ms'])
+  const terminalReason = str(m['terminal_reason'])
+
+  const ended: Frame =
+    subtype === 'success'
+      ? compact<SettledFrame>({
+          kind: 'settled',
+          result: str(m['result']),
+          turns,
+          durationMs,
+          stopReason: str(m['stop_reason']),
+          terminalReason,
+        })
+      : compact<FailedFrame>({
+          kind: 'failed',
+          subtype: subtype ?? 'unknown',
+          reason: reasonIn(m) ?? subtype ?? 'unknown',
+          turns,
+          durationMs,
+          terminalReason,
+        })
+
+  const usd = num(m['total_cost_usd'])
+  if (usd === undefined) return [ended]
+
+  return [
+    ended,
+    compact<CostFrame>({
+      kind: 'cost',
+      usd,
+      turns,
+      durationMs,
+      usage: tokensIn(m['usage']),
+      byModel: byModel(m['modelUsage']),
+    }),
+  ]
+}
+
+/** A failure states its reason in the runtime's own words where it gave any. */
+function reasonIn(m: Rec): string | undefined {
+  const errors = strings(m['errors'])?.filter((error) => error.length > 0) ?? []
+  if (errors.length > 0) return errors.join('\n')
+  return str(m['result'])
+}
+
+function tokensIn(value: unknown): TokenUsage | undefined {
+  const usage = record(value)
+  if (!usage) return undefined
+  const tokens = compact<TokenUsage>({
+    inputTokens: num(usage['input_tokens']),
+    outputTokens: num(usage['output_tokens']),
+    cacheReadInputTokens: num(usage['cache_read_input_tokens']),
+    cacheCreationInputTokens: num(usage['cache_creation_input_tokens']),
+  })
+  return Object.keys(tokens).length > 0 ? tokens : undefined
+}
+
+function byModel(value: unknown): Record<string, ModelCost> | undefined {
+  const usage = record(value)
+  if (!usage) return undefined
+  const out: Record<string, ModelCost> = {}
+  for (const [model, entry] of Object.entries(usage)) {
+    const totals = record(entry)
+    if (!totals) continue
+    out[model] = compact<ModelCost>({
+      costUsd: num(totals['costUSD']),
+      inputTokens: num(totals['inputTokens']),
+      outputTokens: num(totals['outputTokens']),
+      cacheReadInputTokens: num(totals['cacheReadInputTokens']),
+      cacheCreationInputTokens: num(totals['cacheCreationInputTokens']),
+    })
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 function imageIn(block: Rec, thread: string | undefined, toolCallId: string | undefined) {
@@ -264,6 +349,10 @@ function record(value: unknown): Rec | undefined {
 
 function str(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
+}
+
+function num(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function list(value: unknown): unknown[] {
