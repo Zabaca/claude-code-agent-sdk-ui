@@ -10,9 +10,12 @@ export type Frame =
   | SessionFrame
   | HarnessFrame
   | CommandsFrame
+  | PromptFrame
   | TextFrame
   | ReasoningFrame
   | ToolCallFrame
+  | ToolResultFrame
+  | ImageFrame
 
 /** The Session's id, emitted the instant `init` arrives (ADR-0002). */
 export type SessionFrame = {
@@ -40,6 +43,15 @@ export type HarnessFrame = {
 export type CommandsFrame = {
   kind: 'commands'
   commands: SlashCommandInfo[]
+}
+
+/** A person's words. */
+export type PromptFrame = {
+  kind: 'prompt'
+  text: string
+  thread?: string
+  /** The runtime wrote this, not the person. */
+  synthetic?: true
 }
 
 /** A stretch of the agent's prose. */
@@ -74,6 +86,35 @@ export type ThreadOpened = {
   /** What the Thread is called. */
   description?: string
   subagentType?: string
+}
+
+/** What a tool answered, against the call it answers. */
+export type ToolResultFrame = {
+  kind: 'tool-result'
+  /** The `tool_use` id of the call this answers. */
+  id: string
+  output: string
+  isError: boolean
+  /**
+   * The tool's full Output object, keyed by tool. `FileEditOutput` and
+   * `FileWriteOutput` carry `structuredPatch` here, which is where diffs come
+   * from — no file read and no diff algorithm.
+   */
+  structured?: unknown
+  thread?: string
+}
+
+/** An image in the Transcript — pasted by a person, or shown by the agent. */
+export type ImageFrame = {
+  kind: 'image'
+  mediaType?: string
+  /** Base64 payload, when the image arrived inline. */
+  data?: string
+  /** Location, when the image arrived by reference. */
+  url?: string
+  /** The tool call that produced it, when the agent showed it. */
+  toolCallId?: string
+  thread?: string
 }
 
 export type SlashCommandInfo = {

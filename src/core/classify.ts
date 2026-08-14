@@ -3,7 +3,10 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type {
   Frame,
   HarnessFrame,
+  ImageFrame,
+  PromptFrame,
   ReasoningFrame,
+  ToolResultFrame,
   SlashCommandInfo,
   TextFrame,
   ThreadOpened,
@@ -32,6 +35,8 @@ export function classify(message: ClassifyInput): Frame[] {
       return system(m)
     case 'assistant':
       return agent(m)
+    case 'user':
+      return person(m)
     default:
       return []
   }
@@ -72,6 +77,82 @@ function agent(m: Rec): Frame[] {
         return []
     }
   })
+}
+
+function person(m: Rec): Frame[] {
+  const thread = str(m['parent_tool_use_id'])
+  const synthetic = m['isSynthetic'] === true ? true : undefined
+  const content = record(m['message'])?.['content']
+
+  if (typeof content === 'string') {
+    return [compact<PromptFrame>({ kind: 'prompt', text: content, thread, synthetic })]
+  }
+
+  const blocks = contentOf(m['message'])
+  const answers = blocks.filter((block) => str(block['type']) === 'tool_result')
+  // The structured output belongs to a call, and the message names only one.
+  const structured = answers.length === 1 ? m['tool_use_result'] : undefined
+
+  return blocks.flatMap((block): Frame[] => {
+    switch (str(block['type'])) {
+      case 'text': {
+        const text = str(block['text'])
+        return text === undefined
+          ? []
+          : [compact<PromptFrame>({ kind: 'prompt', text, thread, synthetic })]
+      }
+      case 'image': {
+        const image = imageIn(block, thread, undefined)
+        return image ? [image] : []
+      }
+      case 'tool_result': {
+        const id = str(block['tool_use_id'])
+        if (id === undefined) return []
+        return [
+          compact<ToolResultFrame>({
+            kind: 'tool-result',
+            id,
+            output: textIn(block['content']),
+            isError: block['is_error'] === true,
+            structured,
+            thread,
+          }),
+          // A tool may hand back a screenshot for the Transcript to show.
+          ...contentOf({ content: block['content'] }).flatMap((inner): Frame[] => {
+            if (str(inner['type']) !== 'image') return []
+            const image = imageIn(inner, thread, id)
+            return image ? [image] : []
+          }),
+        ]
+      }
+      default:
+        return []
+    }
+  })
+}
+
+function imageIn(block: Rec, thread: string | undefined, toolCallId: string | undefined) {
+  const source = record(block['source'])
+  if (!source) return undefined
+  return compact<ImageFrame>({
+    kind: 'image',
+    mediaType: str(source['media_type']),
+    data: str(source['data']),
+    url: str(source['url']),
+    toolCallId,
+    thread,
+  })
+}
+
+/** Tool output arrives as a string, or as blocks of which only text reads. */
+function textIn(content: unknown): string {
+  if (typeof content === 'string') return content
+  return contentOf({ content })
+    .flatMap((block) => {
+      const text = str(block['text'])
+      return str(block['type']) === 'text' && text !== undefined ? [text] : []
+    })
+    .join('\n')
 }
 
 /** A Thread is the line of work opened by a `Task` call. */

@@ -13,6 +13,17 @@ function assistant(content: unknown[], extra: Record<string, unknown> = {}) {
   }
 }
 
+function person(content: unknown, extra: Record<string, unknown> = {}) {
+  return {
+    type: 'user',
+    session_id: 'sess-1',
+    uuid: 'u-2',
+    parent_tool_use_id: null,
+    message: { role: 'user', content },
+    ...extra,
+  }
+}
+
 describe('init', () => {
   test('emits the Session id at init, not deferred to the result', () => {
     const frames = classify({
@@ -190,6 +201,137 @@ describe('the agent speaking', () => {
           description: 'Review the diff',
           subagentType: 'code-reviewer',
         },
+      },
+    ])
+  })
+})
+
+describe('the person speaking, and tools answering', () => {
+  test('emits a plain string prompt as the person s words', () => {
+    expect(classify(person('ship it'))).toEqual([{ kind: 'prompt', text: 'ship it' }])
+  })
+
+  test('emits a block prompt as the person s words', () => {
+    expect(classify(person([{ type: 'text', text: 'ship it' }]))).toEqual([
+      { kind: 'prompt', text: 'ship it' },
+    ])
+  })
+
+  test('marks a prompt the runtime wrote rather than the person', () => {
+    expect(classify(person('<system-reminder/>', { isSynthetic: true }))).toEqual([
+      { kind: 'prompt', text: '<system-reminder/>', synthetic: true },
+    ])
+  })
+
+  test('emits a pasted image as its own Frame', () => {
+    const frames = classify(
+      person([
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBOR' } },
+        { type: 'text', text: 'what is this' },
+      ]),
+    )
+
+    expect(frames).toEqual([
+      { kind: 'image', mediaType: 'image/png', data: 'iVBOR' },
+      { kind: 'prompt', text: 'what is this' },
+    ])
+  })
+
+  test('emits a tool result against the call it answers', () => {
+    const frames = classify(
+      person([{ type: 'tool_result', tool_use_id: 'toolu_1', content: '12 passed' }]),
+    )
+
+    expect(frames).toEqual([
+      { kind: 'tool-result', id: 'toolu_1', output: '12 passed', isError: false },
+    ])
+  })
+
+  test('emits a failed tool result as failed', () => {
+    const frames = classify(
+      person([
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_1',
+          is_error: true,
+          content: [{ type: 'text', text: 'command not found' }],
+        },
+      ]),
+    )
+
+    expect(frames).toEqual([
+      { kind: 'tool-result', id: 'toolu_1', output: 'command not found', isError: true },
+    ])
+  })
+
+  test('carries the structured tool output, which is where diffs come from', () => {
+    const frames = classify(
+      person([{ type: 'tool_result', tool_use_id: 'toolu_edit', content: 'ok' }], {
+        tool_use_result: { structuredPatch: [{ oldStart: 1, lines: ['-a', '+b'] }] },
+      }),
+    )
+
+    expect(frames).toEqual([
+      {
+        kind: 'tool-result',
+        id: 'toolu_edit',
+        output: 'ok',
+        isError: false,
+        structured: { structuredPatch: [{ oldStart: 1, lines: ['-a', '+b'] }] },
+      },
+    ])
+  })
+
+  test('leaves structured output off when a message answers more than one call', () => {
+    const frames = classify(
+      person(
+        [
+          { type: 'tool_result', tool_use_id: 'toolu_1', content: 'a' },
+          { type: 'tool_result', tool_use_id: 'toolu_2', content: 'b' },
+        ],
+        { tool_use_result: { structuredPatch: [] } },
+      ),
+    )
+
+    expect(frames).toEqual([
+      { kind: 'tool-result', id: 'toolu_1', output: 'a', isError: false },
+      { kind: 'tool-result', id: 'toolu_2', output: 'b', isError: false },
+    ])
+  })
+
+  test('emits an image the agent put in the Transcript, attributed to its call', () => {
+    const frames = classify(
+      person([
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_shot',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'PNG' } },
+          ],
+        },
+      ]),
+    )
+
+    expect(frames).toEqual([
+      { kind: 'tool-result', id: 'toolu_shot', output: '', isError: false },
+      { kind: 'image', mediaType: 'image/png', data: 'PNG', toolCallId: 'toolu_shot' },
+    ])
+  })
+
+  test('attributes a tool result to the Thread that made the call', () => {
+    const frames = classify(
+      person([{ type: 'tool_result', tool_use_id: 'toolu_3', content: 'done' }], {
+        parent_tool_use_id: 'toolu_task',
+      }),
+    )
+
+    expect(frames).toEqual([
+      {
+        kind: 'tool-result',
+        id: 'toolu_3',
+        output: 'done',
+        isError: false,
+        thread: 'toolu_task',
       },
     ])
   })
