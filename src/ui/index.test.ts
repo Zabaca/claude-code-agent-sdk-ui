@@ -17,6 +17,12 @@ describe("the ui entry point", () => {
     }
   });
 
+  test("exports the container, which is ours rather than vendored", () => {
+    expect(typeof (ui as Record<string, unknown>)["ClaudeSession"]).toBe(
+      "function",
+    );
+  });
+
   test("does not export ClaudePermission (ADR-0003)", () => {
     expect(Object.keys(ui)).not.toContain("ClaudePermission");
   });

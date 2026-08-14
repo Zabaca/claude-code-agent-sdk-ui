@@ -1,0 +1,214 @@
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { expect, test } from 'bun:test'
+
+import { reduce } from '../core/reduce.ts'
+import { useAgentSession } from '../react/session.ts'
+import { ClaudeSession } from '../ui/session.tsx'
+import { OPENING, replayTransport, type ReplayTransport } from './replay.ts'
+
+test('replay drives the whole container with no credential and no network', async () => {
+  const replay = replayTransport({ wait: immediately })
+  const view = await mount(replay)
+
+  await drain(replay)
+
+  // Prose the agent "wrote", a tool that answered, and a tool that failed —
+  // what a reviewer is meant to be able to see in seconds.
+  expect(screen.getByText('Reading the test first.')).toBeDefined()
+  expect(statuses('Read')).toEqual(['success'])
+  // The failing run, then the passing one — a status that is read off the
+  // line rather than only coloured.
+  expect(statuses('Bash')).toEqual(['error', 'success'])
+  // The Turn ended, so the working line is gone.
+  expect(there(screen.queryByRole('status'))).toBe(false)
+  view.unmount()
+})
+
+test('the composer reaches replay: a prompt is answered, and settles once', async () => {
+  const replay = replayTransport({ wait: immediately })
+  const view = await mount(replay)
+  await drain(replay)
+
+  await act(async () => {
+    fireEvent.change(composer(), { target: { value: 'what is replay?' } })
+  })
+  await act(async () => {
+    fireEvent.keyDown(composer(), { key: 'Enter' })
+  })
+  await drain(replay)
+
+  // Once, not twice: the Frame replay retains for these words takes the
+  // optimistic Message's place rather than landing beside it.
+  expect(screen.queryAllByText('what is replay?').length).toBe(1)
+  expect(screen.getByText(/Replaying an answer to/)).toBeDefined()
+  // Replay took the Event, so there is nothing to report about it.
+  expect(there(screen.queryByRole('alert'))).toBe(false)
+  view.unmount()
+
+  // And they were retained, not merely drawn: a reload has nothing but the
+  // log to rebuild from, so words the log never took are words a refresh
+  // loses.
+  const reloaded = await mount(replay)
+  await drain(replay)
+  expect(screen.queryAllByText('what is replay?').length).toBe(1)
+  expect(screen.getByText(/Replaying an answer to/)).toBeDefined()
+  reloaded.unmount()
+})
+
+test('prose arrives word by word, before the block becomes a Frame', async () => {
+  const clock = paced()
+  const replay = replayTransport({ wait: clock.wait })
+  const view = await mount(replay)
+
+  // session, harness, commands, the prompt, then the block opening.
+  await clock.beat(6)
+
+  // Half a sentence is on screen and the log does not hold it yet: what is
+  // there is live text, which is the thing that makes the interface feel
+  // alive rather than arriving in blocks.
+  const said = screen.getByRole('log').textContent ?? ''
+  expect(said).toContain('Reading the')
+  expect(said).not.toContain('Reading the test first.')
+  expect(replay.log.some((frame) => frame.kind === 'text')).toBe(false)
+
+  await clock.beat(4)
+  expect(screen.getByRole('log').textContent).toContain('Reading the test first.')
+  // And exactly once: the Frame takes the live copy's place rather than
+  // landing beside it.
+  expect(screen.queryAllByText('Reading the test first.').length).toBe(1)
+  expect(replay.log.some((frame) => frame.kind === 'text')).toBe(true)
+  view.unmount()
+})
+
+test('interrupting replay cuts the script short and ends the Turn idle', async () => {
+  const clock = paced()
+  const replay = replayTransport({ wait: clock.wait })
+  const view = await mount(replay)
+
+  // Far enough in that prose is streaming and a Turn is plainly running.
+  await clock.beat(12)
+  expect(screen.getByRole('status')).toBeDefined()
+  const before = screen.getByRole('log').textContent ?? ''
+
+  await act(async () => {
+    fireEvent.keyDown(composer(), { key: 'Escape' })
+  })
+  // More beats than the whole script has, so anything still willing to play
+  // would have played by now.
+  await clock.beat(120)
+
+  // A stop the person asked for is not a failure, and nothing the runtime was
+  // about to say is said after it.
+  expect(there(screen.queryByRole('status'))).toBe(false)
+  expect(screen.getByRole('log').textContent).not.toContain('There it is')
+  expect(screen.getByRole('log').textContent).not.toContain('the suite is green')
+  expect(before).not.toBe('')
+
+  // Retained as the handler retains it: a Turn that ended idle, keeping the
+  // runtime's word for why. A stop the person asked for is not a problem
+  // they have, and the log must not record one.
+  expect(replay.log.map((frame) => frame.kind)).not.toContain('failed')
+  expect(replay.log.at(-1)?.kind).toBe('settled')
+  view.unmount()
+})
+
+test('a reload replays the log, because every Frame carries its index', async () => {
+  const replay = replayTransport({ wait: immediately })
+  const first = await mount(replay)
+  await drain(replay)
+  const said = screen.getByRole('log').textContent
+  first.unmount()
+
+  // A fresh page sends no `Last-Event-ID`, so the whole log comes down again.
+  const second = await mount(replay)
+  await drain(replay)
+  expect(screen.getByRole('log').textContent).toBe(said)
+  second.unmount()
+})
+
+test('the opening log shows prose and a tool call in every state it has', async () => {
+  // A guard for the tickets that add their own case here: trimming the script
+  // to prose would quietly turn the demo into a demo of less.
+  const transcript = reduce(OPENING.flatMap((beat) => (beat.frame ? [beat.frame] : [])))
+  const kinds = transcript.messages.map((message) => message.kind)
+  const statuses = transcript.messages.flatMap((message) =>
+    message.kind === 'tool-call' ? [message.status] : [],
+  )
+
+  expect(kinds).toContain('prompt')
+  expect(kinds).toContain('text')
+  expect(statuses).toContain('success')
+  expect(statuses).toContain('error')
+  expect(transcript.turn).toEqual({ status: 'idle' })
+})
+
+// --- driving the seam ---------------------------------------------------------
+
+/** No waiting at all, so a whole script lands in microtasks and uses no timer. */
+function immediately(): Promise<void> {
+  return Promise.resolve()
+}
+
+/**
+ * A `wait` a test resolves by hand, so a script can be stopped in the middle
+ * of itself. Only ever one beat is waiting, because the script is sequential.
+ */
+function paced(): { wait: () => Promise<void>; beat(times?: number): Promise<void> } {
+  const waiting: (() => void)[] = []
+  return {
+    wait: () => new Promise<void>((resolve) => waiting.push(resolve)),
+    async beat(times = 1) {
+      for (let at = 0; at < times; at++) {
+        await act(async () => {
+          waiting.shift()?.()
+          await tick()
+        })
+      }
+    },
+  }
+}
+
+async function mount(replay: ReplayTransport): Promise<{ unmount(): void }> {
+  function Host() {
+    const session = useAgentSession({
+      endpoint: 'replay',
+      createEventSource: replay.createEventSource,
+      fetch: replay.fetch,
+    })
+    return <ClaudeSession session={session} />
+  }
+  const view = render(<Host />)
+  await act(async () => {
+    await tick()
+  })
+  return view
+}
+
+/** Lets everything queued play out and React flush what it produced. */
+async function drain(replay: ReplayTransport): Promise<void> {
+  await act(async () => {
+    await replay.quiet()
+    await tick()
+  })
+}
+
+function tick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+function composer(): HTMLInputElement {
+  return screen.getByLabelText('Prompt') as HTMLInputElement
+}
+
+/** The status each of a tool's lines is drawn with, in Transcript order. */
+function statuses(tool: string): (string | undefined)[] {
+  return screen
+    .queryAllByText(tool)
+    .map((found) => found.closest('details')?.dataset['status'])
+    .filter((status): status is string => status !== undefined)
+}
+
+/** Whether something is on screen. See the note in `ui/session.test.tsx`. */
+function there(node: Element | null | undefined): boolean {
+  return node !== null && node !== undefined
+}

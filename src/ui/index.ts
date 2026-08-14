@@ -1,5 +1,5 @@
 /**
- * The vendored Brainless components.
+ * The vendored Brainless components, and the one container that is ours.
  *
  * Every component here keeps upstream's presentational contract — props in,
  * callbacks out, no knowledge of a Session — so re-syncing with upstream stays
@@ -21,6 +21,13 @@ export {
   type ClaudeEffort,
   type ClaudeMode,
 } from "./claude-prompt.tsx";
+/**
+ * `ClaudeSession` is the exception, and a deliberate one: a thin container we
+ * wrote rather than vendored, so it carries no drift cost and may know what a
+ * Session is. Using it is optional — every component above stays usable on its
+ * own, with literal props and no Session anywhere.
+ */
+export { ClaudeSession } from "./session.tsx";
 export { ClaudeSlashMenu, type SlashCommand } from "./claude-slash-menu.tsx";
 export { ClaudeThinking } from "./claude-thinking.tsx";
 export { ClaudeTodoList, type Todo } from "./claude-todo-list.tsx";

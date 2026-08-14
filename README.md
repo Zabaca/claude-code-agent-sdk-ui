@@ -45,6 +45,27 @@ calls, diffs, todo lists, slash commands, interrupt, and session resume.
 `canUseTool` to a real approval UI is v0.2. See [`DESIGN.md`](./DESIGN.md) for
 why.
 
+## Playground
+
+```sh
+bun install
+bun run dev          # http://127.0.0.1:5173  (PORT overrides)
+```
+
+It runs in two modes off the same Frame log.
+
+**Replay** (`?mode=replay`, the default) plays a scripted Frame log through the
+hook's own injectable transport. No credential, no network, no tokens — the
+whole surface in seconds. Type into the composer and it answers; press esc and
+it stops.
+
+**Live** (`?mode=live`) opens the handler's SSE stream and talks to a real
+agent. It needs a credential and it spends money.
+
+They are one code path: the same `useAgentSession`, the same `reduce`, the same
+components. Only where the Frames come from differs — which is why replay
+proves something about live.
+
 ## Entry points
 
 | Import                  | What it is                                                              |
