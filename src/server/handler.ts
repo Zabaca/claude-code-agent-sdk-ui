@@ -10,10 +10,12 @@ import type { FailedFrame, Frame, SettledFrame } from '../core/frame.ts'
  *
  * `GET` opens the stream and replays the log — from `Last-Event-ID` where the
  * browser sent one, from the beginning where it did not, which is what a cold
- * reload wants. `POST` carries an Event: a prompt, or an interrupt.
+ * reload wants. Two named events come down it: `frame`, one retained Frame with
+ * its index as `id:`, and `partial`, live text carrying no `id:` at all.
  *
- * The client may never name `cwd`, `tools`, `permissionMode` or `systemPrompt`
- * (ADR-0001) — nothing but `type` and `text` is ever read off a request.
+ * `POST` carries an {@link AgentEvent}. The client may never name `cwd`,
+ * `tools`, `permissionMode` or `systemPrompt` (ADR-0001) — nothing but `type`
+ * and `text` is ever read off a request, so there is nowhere to name them.
  */
 export type AgentHandler = (request: Request) => Promise<Response>
 
@@ -61,6 +63,7 @@ export type AgentQueryOptions = Pick<
   | 'model'
   | 'systemPrompt'
   | 'permissionMode'
+  | 'allowDangerouslySkipPermissions'
   | 'allowedTools'
   | 'disallowedTools'
   | 'includePartialMessages'
@@ -215,10 +218,12 @@ class AgentSession {
 
   #queryOptions(): AgentQueryOptions {
     const host = this.#options
-    const options: AgentQueryOptions = {
-      includePartialMessages: true,
-      permissionMode: host.permissionMode ?? 'bypassPermissions',
-    }
+    const permissionMode = host.permissionMode ?? 'bypassPermissions'
+    const options: AgentQueryOptions = { includePartialMessages: true, permissionMode }
+
+    // The SDK refuses to bypass permissions unless the bypass is said twice, so
+    // that it is never reached by default. Here it is the default (ADR-0003).
+    if (permissionMode === 'bypassPermissions') options.allowDangerouslySkipPermissions = true
 
     // A Session that already named itself resumes as itself, so a query the
     // handler has to restart continues the same conversation.
