@@ -1,5 +1,10 @@
 import type { ClassifyInput } from '../core/classify.ts'
-import type { AgentPromptMessage, AgentQuery, AgentQueryFactory, AgentQueryParams } from './handler.ts'
+import type {
+  AgentPromptMessage,
+  AgentQuery,
+  AgentQueryFactory,
+  AgentQueryParams,
+} from './handler.ts'
 
 /**
  * A stand-in for the SDK's `query()`, so the `Request → Response` seam can be

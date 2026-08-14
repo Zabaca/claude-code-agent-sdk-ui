@@ -213,9 +213,8 @@ test('an Event the handler does not know is refused, and so is any other method'
   const fake = fakeQuery()
   const handler = createAgentHandler({ createQuery: fake.createQuery })
 
-  const unknown = await handler(
-    new Request(endpoint, { method: 'POST', body: JSON.stringify({ type: 'configure', cwd: '/etc' }) }),
-  )
+  const body = JSON.stringify({ type: 'configure', cwd: '/etc' })
+  const unknown = await handler(new Request(endpoint, { method: 'POST', body }))
   const wrongMethod = await handler(new Request(endpoint, { method: 'DELETE' }))
 
   expect(unknown.status).toBe(400)

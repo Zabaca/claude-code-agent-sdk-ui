@@ -138,20 +138,28 @@ class AgentSession {
           }
         }
 
-        for (let index = resumeFrom(request.headers.get('last-event-id')); index < this.#log.length; index++) {
+        const from = resumeFrom(request.headers.get('last-event-id'))
+        for (let index = from; index < this.#log.length; index++) {
           const frame = this.#log[index]
           if (frame) write(frameEvent(frame, index))
         }
 
-        this.#listeners.add(write)
-        request.signal.addEventListener('abort', () => {
+        const letGo = () => {
           if (write) this.#listeners.delete(write)
           try {
             controller.close()
           } catch {
             // Already closed.
           }
-        })
+        }
+
+        if (request.signal.aborted) {
+          letGo()
+          return
+        }
+
+        this.#listeners.add(write)
+        request.signal.addEventListener('abort', letGo)
       },
       cancel: () => {
         if (write) this.#listeners.delete(write)
