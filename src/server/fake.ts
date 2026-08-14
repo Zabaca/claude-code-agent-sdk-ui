@@ -5,6 +5,7 @@ import type {
   AgentQueryFactory,
   AgentQueryParams,
 } from './handler.ts'
+import { pushable } from './pushable.ts'
 
 /**
  * A stand-in for the SDK's `query()`, so the `Request → Response` seam can be
@@ -60,53 +61,4 @@ export function fakeQuery(): FakeQuery {
 
 async function collect(prompt: AsyncIterable<AgentPromptMessage>, into: AgentPromptMessage[]) {
   for await (const message of prompt) into.push(message)
-}
-
-type Pushable<T> = AsyncIterable<T> & {
-  push(item: T): void
-  end(): void
-  fail(error: unknown): void
-}
-
-/** A queue read as an async iterable — the shape streaming input takes. */
-export function pushable<T>(): Pushable<T> {
-  const items: T[] = []
-  let wake: (() => void) | undefined
-  let done = false
-  let failure: { error: unknown } | undefined
-
-  const stir = () => {
-    const resume = wake
-    wake = undefined
-    resume?.()
-  }
-
-  return {
-    push: (item) => {
-      items.push(item)
-      stir()
-    },
-    end: () => {
-      done = true
-      stir()
-    },
-    fail: (error) => {
-      failure = { error }
-      stir()
-    },
-    async *[Symbol.asyncIterator]() {
-      while (true) {
-        const next = items.shift()
-        if (next !== undefined) {
-          yield next
-          continue
-        }
-        if (failure) throw failure.error
-        if (done) return
-        await new Promise<void>((resolve) => {
-          wake = resolve
-        })
-      }
-    },
-  }
 }

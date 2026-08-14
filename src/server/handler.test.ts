@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { readdir } from 'node:fs/promises'
 
 import type { ClassifyInput } from '../core/classify.ts'
 import { fakeQuery } from './fake.ts'
@@ -223,7 +224,7 @@ test('an Event the handler does not know is refused, and so is any other method'
 })
 
 test('the SDK is reached for lazily, so no import of the server costs a credential', async () => {
-  for (const name of ['handler.ts', 'index.ts', 'fake.ts']) {
+  for (const name of await readdir(import.meta.dir)) {
     const source = await Bun.file(`${import.meta.dir}/${name}`).text()
     const imports = source.match(/^import .*@anthropic-ai\/claude-agent-sdk.*$/gm) ?? []
     expect(imports.every((line) => line.startsWith('import type '))).toBe(true)

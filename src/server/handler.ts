@@ -2,6 +2,7 @@ import type { Options } from '@anthropic-ai/claude-agent-sdk'
 
 import { classify, type ClassifyInput } from '../core/classify.ts'
 import type { FailedFrame, Frame, SettledFrame } from '../core/frame.ts'
+import { pushable, type Pushable } from './pushable.ts'
 
 /**
  * One handler, one Session (ADR-0002). It hosts the SDK's `query()`, classifies
@@ -48,7 +49,11 @@ export type AgentQueryParams = {
   options: AgentQueryOptions
 }
 
-/** What the handler pushes into streaming input when a Turn starts. */
+/**
+ * What the handler pushes into streaming input when a Turn starts — the SDK's
+ * own `SDKUserMessage` shape, named for the wire rather than for the glossary.
+ * A Message in `CONTEXT.md` is an entry in the Transcript; this is not one.
+ */
 export type AgentPromptMessage = {
   type: 'user'
   message: { role: 'user'; content: string }
@@ -321,8 +326,11 @@ class AgentSession {
   // --- the log ----------------------------------------------------------------
 
   #append(frame: Frame): void {
-    // `signal.aborted` short-circuits before any failure Frame is emitted: what
-    // the runtime calls an aborted Turn is, here, a Turn that finished as asked.
+    // An interrupt still in flight short-circuits the failure before it reaches
+    // the log: what the runtime reports as an aborted Turn is retained here as a
+    // Turn that finished as asked, because a stop the person asked for is not a
+    // problem they have. `terminalReason` survives, so a consumer that wants to
+    // tell an interrupt from a natural ending still can.
     const retained = frame.kind === 'failed' && this.#interrupting ? idleFrom(frame) : frame
 
     if (retained.kind === 'session') this.#sessionId = retained.sessionId
@@ -459,35 +467,4 @@ function str(value: unknown): string | undefined {
 
 function num(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-// --- streaming input -----------------------------------------------------------
-
-type Pushable<T> = AsyncIterable<T> & { push(item: T): void }
-
-/** A queue read as an async iterable — the shape streaming input takes. */
-function pushable<T>(): Pushable<T> {
-  const items: T[] = []
-  let wake: (() => void) | undefined
-
-  return {
-    push: (item) => {
-      items.push(item)
-      const resume = wake
-      wake = undefined
-      resume?.()
-    },
-    async *[Symbol.asyncIterator]() {
-      while (true) {
-        const next = items.shift()
-        if (next !== undefined) {
-          yield next
-          continue
-        }
-        await new Promise<void>((resolve) => {
-          wake = resolve
-        })
-      }
-    },
-  }
 }
