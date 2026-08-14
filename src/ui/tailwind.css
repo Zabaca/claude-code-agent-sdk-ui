@@ -1,0 +1,18 @@
+/**
+ * Stylesheet source for the vendored Brainless components.
+ *
+ * The components stay written in Tailwind so they remain diffable against
+ * upstream, but nothing downstream is asked to run Tailwind: `bun run
+ * build:css` compiles this file to `dist/styles.css`, which is plain CSS a
+ * consumer imports and is done.
+ *
+ * Every utility carries the `cc:` prefix so the shipped stylesheet cannot
+ * collide with a consumer's own classes, and only the `theme` and `utilities`
+ * layers are imported — Preflight is deliberately left out, because a
+ * component library has no business resetting its host's page.
+ */
+@import "tailwindcss/theme.css" layer(theme) prefix(cc);
+@import "tailwindcss/utilities.css" layer(utilities) prefix(cc);
+@import "./theme.css";
+
+@source "./*.tsx";

@@ -16,11 +16,12 @@
     "./server": "./src/server/index.ts",
     "./react": "./src/react/index.ts",
     "./ui": "./src/ui/index.ts",
-    "./styles.css": "./src/ui/styles.css"
+    "./styles.css": "./dist/styles.css"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test src",
+    "build:css": "tailwindcss --input ./src/ui/tailwind.css --output ./dist/styles.css",
     "dev": "bun run --hot example/server.ts"
   },
   "peerDependencies": {
