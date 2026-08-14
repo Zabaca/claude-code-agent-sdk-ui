@@ -537,3 +537,100 @@ describe('what the agent can still see', () => {
     ])
   })
 })
+
+describe('a shape we do not control', () => {
+  test('produces no Frames for a message type it has never heard of', () => {
+    expect(classify({ type: 'quantum_entanglement_event', session_id: 'sess-1' })).toEqual([])
+    expect(classify({ type: 'system', subtype: 'plugin_install' })).toEqual([])
+  })
+
+  test('produces no Frames and no throw for a message with nothing in it', () => {
+    expect(classify({})).toEqual([])
+    expect(classify({ type: 'assistant' })).toEqual([])
+    expect(classify({ type: 'user' })).toEqual([])
+    expect(classify({ type: 'conversation_reset' })).toEqual([])
+    expect(classify({ type: 'rate_limit_event' })).toEqual([])
+  })
+
+  test('survives fields whose type is not what the SDK documents', () => {
+    expect(() =>
+      classify({
+        type: 'assistant',
+        parent_tool_use_id: 42,
+        message: 'not an envelope',
+        context_usage: [],
+      }),
+    ).not.toThrow()
+
+    expect(
+      classify({
+        type: 'user',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 7 }] },
+      }),
+    ).toEqual([{ kind: 'tool-result', id: 'toolu_1', output: '', isError: false }])
+  })
+
+  test('drops content blocks it has no Frame for, keeping the ones it has', () => {
+    const frames = classify(
+      assistant([
+        { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search' },
+        { type: 'text', text: 'Found it.' },
+      ]),
+    )
+
+    expect(frames).toEqual([{ kind: 'text', text: 'Found it.' }])
+  })
+
+  test('still emits the Session id when init carries nothing else', () => {
+    expect(classify({ type: 'system', subtype: 'init', session_id: 'sess-1' })).toEqual([
+      { kind: 'session', sessionId: 'sess-1' },
+      { kind: 'harness' },
+    ])
+  })
+})
+
+describe('a recorded stream', () => {
+  test('yields the ordered Frames describing what happened', () => {
+    const stream = [
+      { type: 'system', subtype: 'init', session_id: 'sess-1', model: 'claude-opus-4' },
+      person('review the diff'),
+      assistant([
+        { type: 'text', text: 'Delegating.' },
+        {
+          type: 'tool_use',
+          id: 'toolu_task',
+          name: 'Task',
+          input: { description: 'Review the diff', subagent_type: 'code-reviewer' },
+        },
+      ]),
+      assistant([{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: '/a.ts' } }], {
+        parent_tool_use_id: 'toolu_task',
+      }),
+      person([{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'export const a = 1' }], {
+        parent_tool_use_id: 'toolu_task',
+      }),
+      person([{ type: 'tool_result', tool_use_id: 'toolu_task', content: 'Looks good.' }]),
+      { type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto' } },
+      { type: 'result', subtype: 'success', result: 'Reviewed.', total_cost_usd: 0.02 },
+    ]
+
+    const frames = stream.flatMap((message) => classify(message))
+
+    expect(frames.map((frame) => frame.kind)).toEqual([
+      'session',
+      'harness',
+      'prompt',
+      'text',
+      'tool-call',
+      'tool-call',
+      'tool-result',
+      'tool-result',
+      'compacted',
+      'settled',
+      'cost',
+    ])
+    expect(frames.filter((frame) => 'thread' in frame && frame.thread === 'toolu_task')).toHaveLength(
+      2,
+    )
+  })
+})
