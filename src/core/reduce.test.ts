@@ -90,3 +90,71 @@ describe('the person speaking', () => {
     ])
   })
 })
+
+describe('a tool answering the call that opened it', () => {
+  test('leaves a call pending until it answers', () => {
+    const transcript = transcriptOf([
+      assistant([{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'bun test' } }]),
+    ])
+
+    expect(transcript.messages).toEqual([
+      {
+        kind: 'tool-call',
+        id: 'toolu_1',
+        name: 'Bash',
+        input: { command: 'bun test' },
+        status: 'pending',
+      },
+    ])
+  })
+
+  test('attaches an answer to the call it answers rather than appending a Message', () => {
+    const transcript = transcriptOf([
+      assistant([{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'bun test' } }]),
+      assistant([{ type: 'tool_use', id: 'toolu_2', name: 'Read', input: { file_path: '/a.ts' } }]),
+      person([{ type: 'tool_result', tool_use_id: 'toolu_1', content: '12 passed' }]),
+    ])
+
+    expect(transcript.messages).toHaveLength(2)
+    expect(transcript.messages[0]).toEqual({
+      kind: 'tool-call',
+      id: 'toolu_1',
+      name: 'Bash',
+      input: { command: 'bun test' },
+      status: 'success',
+      output: '12 passed',
+    })
+    expect(transcript.messages[1]).toMatchObject({ id: 'toolu_2', status: 'pending' })
+  })
+
+  test('shows a failure as a status, without expanding anything', () => {
+    const transcript = transcriptOf([
+      assistant([{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'nope' } }]),
+      person([
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_1',
+          is_error: true,
+          content: 'command not found',
+        },
+      ]),
+    ])
+
+    expect(transcript.messages[0]).toMatchObject({
+      status: 'error',
+      output: 'command not found',
+    })
+  })
+
+  test('carries the structured output through, which is where diffs come from', () => {
+    const patch = [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-a', '+b'] }]
+    const transcript = transcriptOf([
+      assistant([{ type: 'tool_use', id: 'toolu_e', name: 'Edit', input: { file_path: '/a.ts' } }]),
+      person([{ type: 'tool_result', tool_use_id: 'toolu_e', content: 'ok' }], {
+        tool_use_result: { structuredPatch: patch },
+      }),
+    ])
+
+    expect(transcript.messages[0]).toMatchObject({ structured: { structuredPatch: patch } })
+  })
+})

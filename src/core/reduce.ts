@@ -16,6 +16,8 @@ import type {
  */
 export function reduce(frames: readonly Frame[]): Transcript {
   const messages: Message[] = []
+  /** Where each open call sits, so its answer patches it rather than appends. */
+  const calls = new Map<string, number>()
 
   for (const frame of frames) {
     switch (frame.kind) {
@@ -40,6 +42,7 @@ export function reduce(frames: readonly Frame[]): Transcript {
         )
         break
       case 'tool-call':
+        calls.set(frame.id, messages.length)
         messages.push(
           compact<ToolCallMessage>({
             kind: 'tool-call',
@@ -52,6 +55,21 @@ export function reduce(frames: readonly Frame[]): Transcript {
           }),
         )
         break
+      case 'tool-result': {
+        const at = calls.get(frame.id)
+        const call = at === undefined ? undefined : messages[at]
+        // A result whose call is absent has no Message to attach to. It can
+        // only reach here on a log truncated before the call — a resumed
+        // stream — where there is nothing on screen for it to answer.
+        if (at === undefined || call?.kind !== 'tool-call') break
+        messages[at] = compact<ToolCallMessage>({
+          ...call,
+          status: frame.isError ? 'error' : 'success',
+          output: frame.output,
+          structured: frame.structured,
+        })
+        break
+      }
       default:
         break
     }
