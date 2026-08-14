@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { expect, test } from 'bun:test'
+import { dirname, relative, resolve } from 'node:path'
 
 import { fakeSse, type FakeSse } from './fake.ts'
 import {
@@ -539,6 +540,35 @@ test("effort is the composer's own, because no Frame has a word for it", async (
   await act(async () => session.current.setEffort('max'))
 
   expect(session.current.effort).toBe('max')
+})
+
+test('the react entry point reaches core and nothing else', async () => {
+  // The four entry points are separately consumable, and `package.json` maps
+  // each to raw source — so an import of `./react` that reached `./server`
+  // would pull the SDK's types into a consumer's typecheck, and one that
+  // reached `./ui` would pull React and Tailwind into a headless one.
+  const src = `${import.meta.dir}/..`
+  const reached = new Set<string>()
+  const queue = [`${src}/react/index.ts`]
+
+  while (queue.length > 0) {
+    const path = queue.pop()
+    if (path === undefined || reached.has(path)) continue
+    reached.add(path)
+    const source = await Bun.file(path).text()
+    expect(source).not.toContain('@anthropic-ai/claude-agent-sdk')
+    for (const [, specifier] of source.matchAll(/ from '(\.[^']+)'/g)) {
+      if (specifier) queue.push(resolve(dirname(path), specifier))
+    }
+  }
+
+  const outside = [...reached]
+    .map((path) => relative(src, path))
+    .filter((path) => !path.startsWith('core/') && !path.startsWith('react/'))
+    .sort()
+
+  expect(outside).toEqual([])
+  expect(reached.size).toBeGreaterThan(2)
 })
 
 // --- driving the seam ---------------------------------------------------------

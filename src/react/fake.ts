@@ -1,5 +1,5 @@
 import type { Frame } from '../core/frame.ts'
-import type { PartialText } from '../server/handler.ts'
+import type { PartialText } from '../core/partial.ts'
 import type { AgentEventSource, AgentEventSourceFactory, AgentServerEvent } from './session.ts'
 
 /**

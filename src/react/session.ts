@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 
+import type { ClaudeEffort, ClaudeMode } from '../core/composer.ts'
+import type { AgentEvent } from '../core/event.ts'
 import type { Frame } from '../core/frame.ts'
+import type { PartialText } from '../core/partial.ts'
 import { reduce } from '../core/reduce.ts'
 import type { Message, ReasoningMessage, TextMessage, Transcript } from '../core/transcript.ts'
-import type { AgentEvent, PartialText } from '../server/handler.ts'
-import type { ClaudeEffort, ClaudeMode } from '../ui/claude-prompt.tsx'
 
 /**
  * The browser half. Opens the SSE stream the handler serves, runs `reduce` over
@@ -174,8 +175,14 @@ export type AgentSession = {
   /**
    * The permission mode the runtime actually loaded, in the composer's
    * vocabulary. Read-only, and deliberately: the client may not name what runs
-   * (ADR-0001), so there is no setter here that would be telling the truth. A
-   * composer that wants to offer one is offering something v0.1 cannot do.
+   * (ADR-0001), and that is enforced by the wire rather than merely asserted —
+   * an {@link AgentEvent} is a prompt or an interrupt, so there is no Event a
+   * mode change could travel on.
+   *
+   * `ClaudePrompt` takes an `onModeChange`, and under this hook there is
+   * nothing to give it: shift+tab cycling the mode line would change what the
+   * composer says without changing what runs, which is worse than doing
+   * nothing. Leave the prop unset until an Event exists that can carry it.
    */
   mode: ClaudeMode
   /**
