@@ -74,6 +74,9 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
         // only reach here on a log truncated before the call — a resumed
         // stream — where there is nothing on screen for it to answer.
         if (at === undefined || call?.kind !== 'tool-call') break
+        // The result's own `thread` is not copied across: an answer belongs to
+        // the call it answers, and the call already names that Thread. Every
+        // other field of the Frame lands on the Message.
         messages[at] = compact<ToolCallMessage>({
           ...call,
           status: frame.isError ? 'error' : 'success',
@@ -206,7 +209,10 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
             kind: 'outcome',
             outcome: stopped ? 'interrupted' : 'failed',
             subtype: frame.subtype,
-            reason: stopped ? undefined : frame.reason,
+            // Said even for an interrupt: the runtime's account of the abort is
+            // worth keeping. It is `turn` that stays clean, because an idle
+            // Turn has no problem to report.
+            reason: frame.reason,
             turns: frame.turns,
             durationMs: frame.durationMs,
             stopReason: frame.stopReason,
@@ -216,6 +222,10 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
         break
       }
       default:
+        // Unreachable. A Frame kind added to the vocabulary and left unhandled
+        // fails this assignment at typecheck rather than falling through here
+        // and reaching no viewer — which is how a kind once went missing.
+        frame satisfies never
         break
     }
   }

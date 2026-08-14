@@ -331,6 +331,27 @@ describe('the Turn', () => {
     },
   )
 
+  test('still says what the runtime said about an interrupt, without calling it a problem', () => {
+    const transcript = transcriptOf([
+      person('ship it'),
+      {
+        type: 'result',
+        subtype: 'error_during_execution',
+        terminal_reason: 'aborted_tools',
+        errors: ['Aborted by user while a tool was running'],
+      },
+    ])
+
+    expect(transcript.messages.at(-1)).toEqual({
+      kind: 'outcome',
+      outcome: 'interrupted',
+      subtype: 'error_during_execution',
+      reason: 'Aborted by user while a tool was running',
+      terminalReason: 'aborted_tools',
+    })
+    expect(transcript.turn).toEqual({ status: 'idle' })
+  })
+
   test('leaves an earlier Turn s outcome standing when the next Turn starts', () => {
     const transcript = transcriptOf([
       person('ship it'),

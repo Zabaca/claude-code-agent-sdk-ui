@@ -199,9 +199,13 @@ export type OutcomeMessage = {
   outcome: TurnOutcome
   /** What the Turn answered, when it settled. */
   result?: string
-  /** The runtime's result subtype, when it failed. */
+  /** The runtime's result subtype, when it did not settle. */
   subtype?: string
-  /** Why it stopped, when it failed. */
+  /**
+   * Why it stopped, in the runtime's own words. Present on an interrupt too —
+   * the runtime's account of the abort is worth reading; it is `Turn` that
+   * stays clean, because an idle Turn has no problem to report.
+   */
   reason?: string
   turns?: number
   durationMs?: number
