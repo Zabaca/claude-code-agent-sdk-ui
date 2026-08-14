@@ -37,14 +37,19 @@ Bun.serve({
 ```
 
 That is a working Claude Code session in a browser: streaming text, live tool
-calls, diffs, todo lists, permission prompts you can actually answer, slash
-commands, interrupt, and session resume.
+calls, diffs, todo lists, slash commands, interrupt, and session resume.
+
+**Permission prompts are not in v0.1.** The handler runs
+`permissionMode: 'bypassPermissions'` — tools execute without asking, and
+`ClaudePermission` is not part of the `ui` surface. Wiring the SDK's
+`canUseTool` to a real approval UI is v0.2. See [`DESIGN.md`](./DESIGN.md) for
+why.
 
 ## Entry points
 
 | Import                  | What it is                                                              |
 | ----------------------- | ----------------------------------------------------------------------- |
-| `.../core`              | `classify(SDKMessage) → Frame[]` and `reduce(Frame[]) → Timeline`. Pure. |
+| `.../core`              | `classify(SDKMessage) → Frame[]` and `reduce(Frame[]) → Transcript`. Pure. |
 | `.../server`            | The `query()` host — SSE transport, `canUseTool` bridge, interrupt.     |
 | `.../react`             | `useAgentSession()` and friends.                                        |
 | `.../ui`                | Vendored, wired Brainless components.                                   |

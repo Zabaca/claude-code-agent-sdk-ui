@@ -75,13 +75,13 @@ What the SDK emits against what Brainless can accept:
 | SDK reality                                       | Brainless                                    | Gap                                       |
 | ------------------------------------------------- | -------------------------------------------- | ----------------------------------------- |
 | `tool_use` arrives *before* any result            | `ClaudeToolCall.result: string` — required    | cannot render an in-flight call            |
-| `Edit` gives `old_string` / `new_string`          | `ClaudeDiff.lines: DiffLine[]`                | the hunk must be computed                  |
+| `Edit` returns `structuredPatch` hunks             | `ClaudeDiff.lines: DiffLine[]`                | shape mismatch only — mechanical           |
 | `canUseTool` → `{behavior, updatedInput}`         | `onChoose(index)`                             | no async resolve, no input editing         |
 | streaming text deltas                             | `ClaudeMessage` takes children                | no accumulation                            |
 | `parent_tool_use_id`                              | —                                             | nothing                                    |
 | `compact_boundary`, `rate_limit_event`, context   | —                                             | nothing                                    |
 | shift+tab modes, effort chips                     | display-only props                            | no `onModeChange` / `onEffortChange`       |
-| `ClaudeThinking`                                  | verbs rotate on a `setInterval`               | not fed by real thinking blocks            |
+| `ClaudeThinking` is a working line, not reasoning  | verbs rotate on a `setInterval`               | not driven by real Turn state              |
 | `result.subtype !== 'success'`                    | —                                             | no failed-turn rendering                   |
 
 Closing these requires editing the components, which is why they are vendored
@@ -92,13 +92,13 @@ here (MIT, attribution in `LICENSE`) rather than installed via `shadcn add`.
 Four entry points, one package.
 
 ```
-src/core     classify(SDKMessage) → Frame[]   ·   reduce(Frame[]) → Timeline
+src/core     classify(SDKMessage) → Frame[]   ·   reduce(Frame[]) → Transcript
              Pure. No SDK import at run time, no clock, no socket.
 
 src/server   The query() host: SSE transport, canUseTool bridge, interrupt.
              Bun-first — Bun.serve and Hono.
 
-src/react    useAgentSession() → { timeline, send, interrupt, resolvePermission, … }
+src/react    useAgentSession() → { transcript, send, interrupt, resolvePermission, … }
 
 src/ui       Brainless components, vendored and wired.
 ```
@@ -110,7 +110,7 @@ const session = useAgentSession({ endpoint: "/api/agent" })
 return <ClaudeSession session={session} />
 ```
 
-### Why the frame stream is a separate stage from the timeline
+### Why the frame stream is a separate stage from the transcript
 
 `classify` answers "what happened", once per SDK message, with no memory.
 `reduce` answers "what is on screen now", accumulating deltas into bubbles,
