@@ -40,6 +40,11 @@ export type ClassifyInput = { readonly [field: string]: unknown }
  * no memory, no clock, no socket and no runtime SDK import.
  *
  * An unrecognised message type produces no Frames and never throws.
+ *
+ * Partial `stream_event` messages produce no Frames: deltas stream live on the
+ * wire, and the server folds a block's deltas into the whole message this sees,
+ * so the retained Frame log holds whole Messages and stays a deterministic
+ * fixture rather than a timing-dependent recording.
  */
 export function classify(message: ClassifyInput): Frame[] {
   const m = record(message)
