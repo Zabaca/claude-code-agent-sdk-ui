@@ -1,29 +1,37 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 
 import type {
+  CompactedFrame,
+  ContextCategory,
+  ContextFrame,
   CostFrame,
   FailedFrame,
   Frame,
   HarnessFrame,
-  ModelCost,
-  SettledFrame,
-  TokenUsage,
   ImageFrame,
+  ModelCost,
   PromptFrame,
+  RateLimitFrame,
+  RecallFrame,
+  RecalledMemory,
   ReasoningFrame,
-  ToolResultFrame,
+  SettledFrame,
   SlashCommandInfo,
   TextFrame,
   ThreadOpened,
+  TokenUsage,
   ToolCallFrame,
+  ToolResultFrame,
 } from './frame.ts'
 
 /**
  * What `classify` accepts. `SDKMessage` is imported as a **type only** and
  * every field is treated as optional on the way in: a panel must never fail a
- * Turn because the SDK grew a field, or dropped one.
+ * Turn because the SDK grew a field, or dropped one. Any `SDKMessage` is a
+ * `ClassifyInput`; so is a recorded message from an SDK version this build has
+ * never seen.
  */
-export type ClassifyInput = SDKMessage | Record<string, unknown>
+export type ClassifyInput = { readonly [field: string]: unknown }
 
 /**
  * `classify(SDKMessage) → Frame[]` — what happened, once per SDK message, with
@@ -44,6 +52,12 @@ export function classify(message: ClassifyInput): Frame[] {
       return person(m)
     case 'result':
       return outcome(m)
+    case 'conversation_reset': {
+      const conversationId = str(m['new_conversation_id'])
+      return conversationId === undefined ? [] : [{ kind: 'reset', conversationId }]
+    }
+    case 'rate_limit_event':
+      return rateLimit(m['rate_limit_info'])
     default:
       return []
   }
@@ -52,6 +66,10 @@ export function classify(message: ClassifyInput): Frame[] {
 function agent(m: Rec): Frame[] {
   const thread = str(m['parent_tool_use_id'])
 
+  return [...spoken(m, thread), ...contextUsage(m['context_usage'])]
+}
+
+function spoken(m: Rec, thread: string | undefined): Frame[] {
   return contentOf(m['message']).flatMap((block): Frame[] => {
     switch (str(block['type'])) {
       case 'text': {
@@ -259,9 +277,89 @@ function system(m: Rec): Frame[] {
       return init(m)
     case 'commands_changed':
       return [{ kind: 'commands', commands: commandsOf(m['commands']) }]
+    case 'compact_boundary':
+      return [compacted(m['compact_metadata'])]
+    case 'memory_recall':
+      return [
+        compact<RecallFrame>({
+          kind: 'recall',
+          mode: str(m['mode']),
+          memories: memoriesIn(m['memories']),
+        }),
+      ]
     default:
       return []
   }
+}
+
+function compacted(metadata: unknown): Frame {
+  const meta = record(metadata) ?? {}
+  return compact<CompactedFrame>({
+    kind: 'compacted',
+    trigger: str(meta['trigger']),
+    preTokens: num(meta['pre_tokens']),
+    postTokens: num(meta['post_tokens']),
+    durationMs: num(meta['duration_ms']),
+  })
+}
+
+function memoriesIn(value: unknown): RecalledMemory[] {
+  return list(value).flatMap((entry): RecalledMemory[] => {
+    const memory = record(entry)
+    const path = memory && str(memory['path'])
+    if (!memory || path === undefined) return []
+    return [
+      compact<RecalledMemory>({
+        path,
+        scope: str(memory['scope']),
+        content: str(memory['content']),
+      }),
+    ]
+  })
+}
+
+function rateLimit(value: unknown): Frame[] {
+  const info = record(value)
+  if (!info) return []
+  return [
+    compact<RateLimitFrame>({
+      kind: 'rate-limit',
+      status: str(info['status']),
+      limitType: str(info['rateLimitType']),
+      utilization: num(info['utilization']),
+      resetsAt: num(info['resetsAt']),
+      overageStatus: str(info['overageStatus']),
+      usingOverage: typeof info['isUsingOverage'] === 'boolean' ? info['isUsingOverage'] : undefined,
+    }),
+  ]
+}
+
+/** The structured twin of the /context report, when the SDK attaches one. */
+function contextUsage(value: unknown): Frame[] {
+  const usage = record(value)
+  const totalTokens = usage && num(usage['total_tokens'])
+  if (!usage || totalTokens === undefined) return []
+
+  const overLimit = record(usage['over_limit'])
+
+  return [
+    compact<ContextFrame>({
+      kind: 'context',
+      model: str(usage['model']),
+      totalTokens,
+      maxTokens: num(usage['raw_max_tokens']),
+      percentage: num(usage['percentage']),
+      overLimit: overLimit
+        ? compact<{ tokensOver?: number; kind?: string }>({
+            tokensOver: num(overLimit['tokens_over']),
+            kind: str(overLimit['kind']),
+          })
+        : undefined,
+      categories: named(usage['categories'], (entry, name) =>
+        compact<ContextCategory>({ name, tokens: num(entry['tokens']), kind: str(entry['kind']) }),
+      ),
+    }),
+  ]
 }
 
 function init(m: Rec): Frame[] {

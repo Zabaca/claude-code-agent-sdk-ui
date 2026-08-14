@@ -19,6 +19,11 @@ export type Frame =
   | SettledFrame
   | FailedFrame
   | CostFrame
+  | CompactedFrame
+  | ResetFrame
+  | RecallFrame
+  | ContextFrame
+  | RateLimitFrame
 
 /** The Session's id, emitted the instant `init` arrives (ADR-0002). */
 export type SessionFrame = {
@@ -162,6 +167,62 @@ export type TokenUsage = {
 }
 
 export type ModelCost = TokenUsage & { costUsd?: number }
+
+/** Context was compacted: what the agent can see is now a summary. */
+export type CompactedFrame = {
+  kind: 'compacted'
+  trigger?: 'manual' | 'auto' | string
+  preTokens?: number
+  postTokens?: number
+  durationMs?: number
+}
+
+/** The conversation was reset — memory gone, rather than memory summarised. */
+export type ResetFrame = {
+  kind: 'reset'
+  conversationId: string
+}
+
+/** Memory surfaced from outside this conversation. */
+export type RecallFrame = {
+  kind: 'recall'
+  mode?: 'select' | 'synthesize' | string
+  memories: RecalledMemory[]
+}
+
+export type RecalledMemory = {
+  path: string
+  scope?: 'personal' | 'team' | 'organization' | string
+  content?: string
+}
+
+/** How full the context window is. A different meter from the rate limit. */
+export type ContextFrame = {
+  kind: 'context'
+  model?: string
+  totalTokens: number
+  maxTokens?: number
+  percentage?: number
+  overLimit?: { tokensOver?: number; kind?: string }
+  categories?: ContextCategory[]
+}
+
+export type ContextCategory = {
+  name: string
+  tokens?: number
+  kind?: 'used' | 'free' | 'buffer' | 'deferred' | string
+}
+
+/** How much of the subscription is left. A different meter from the context. */
+export type RateLimitFrame = {
+  kind: 'rate-limit'
+  status?: 'allowed' | 'allowed_warning' | 'rejected' | string
+  limitType?: string
+  utilization?: number
+  resetsAt?: number
+  overageStatus?: string
+  usingOverage?: boolean
+}
 
 export type SlashCommandInfo = {
   name: string

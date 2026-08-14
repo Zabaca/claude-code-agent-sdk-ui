@@ -1,6 +1,14 @@
+import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { describe, expect, test } from 'bun:test'
 
 import { classify } from './classify.ts'
+import type { Frame } from './frame.ts'
+
+test('accepts an SDKMessage exactly as the SDK types it', () => {
+  const accepts: (message: SDKMessage) => Frame[] = classify
+
+  expect(accepts).toBe(classify)
+})
 
 function assistant(content: unknown[], extra: Record<string, unknown> = {}) {
   return {
@@ -420,5 +428,112 @@ describe('the Turn ending', () => {
       usage: { inputTokens: 120, outputTokens: 45, cacheReadInputTokens: 900 },
       byModel: { 'claude-opus-4': { costUsd: 0.0412, inputTokens: 120, outputTokens: 45 } },
     })
+  })
+})
+
+describe('what the agent can still see', () => {
+  test('marks the compaction boundary, so the screen does not quietly lie', () => {
+    const frames = classify({
+      type: 'system',
+      subtype: 'compact_boundary',
+      session_id: 'sess-1',
+      compact_metadata: { trigger: 'auto', pre_tokens: 180000, post_tokens: 42000 },
+    })
+
+    expect(frames).toEqual([
+      { kind: 'compacted', trigger: 'auto', preTokens: 180000, postTokens: 42000 },
+    ])
+  })
+
+  test('marks a conversation reset, which is memory gone rather than summarised', () => {
+    const frames = classify({
+      type: 'conversation_reset',
+      session_id: 'sess-1',
+      new_conversation_id: 'conv-2',
+    })
+
+    expect(frames).toEqual([{ kind: 'reset', conversationId: 'conv-2' }])
+  })
+
+  test('marks memory recalled from outside this conversation', () => {
+    const frames = classify({
+      type: 'system',
+      subtype: 'memory_recall',
+      session_id: 'sess-1',
+      mode: 'select',
+      memories: [
+        { path: '/memories/ports.md', scope: 'personal' },
+        { path: '<synthesis:/repo>', scope: 'team', content: 'Prefers Bun.' },
+      ],
+    })
+
+    expect(frames).toEqual([
+      {
+        kind: 'recall',
+        mode: 'select',
+        memories: [
+          { path: '/memories/ports.md', scope: 'personal' },
+          { path: '<synthesis:/repo>', scope: 'team', content: 'Prefers Bun.' },
+        ],
+      },
+    ])
+  })
+
+  test('emits context-window usage, a different meter from the subscription', () => {
+    const frames = classify({
+      type: 'assistant',
+      session_id: 'sess-1',
+      parent_tool_use_id: null,
+      message: { role: 'assistant', content: [] },
+      context_usage: {
+        model: 'claude-opus-4',
+        total_tokens: 120000,
+        raw_max_tokens: 200000,
+        percentage: 60,
+        categories: [
+          { name: 'Messages', tokens: 90000, kind: 'used' },
+          { name: 'Free space', tokens: 80000, kind: 'free' },
+        ],
+      },
+    })
+
+    expect(frames).toEqual([
+      {
+        kind: 'context',
+        model: 'claude-opus-4',
+        totalTokens: 120000,
+        maxTokens: 200000,
+        percentage: 60,
+        categories: [
+          { name: 'Messages', tokens: 90000, kind: 'used' },
+          { name: 'Free space', tokens: 80000, kind: 'free' },
+        ],
+      },
+    ])
+  })
+
+  test('emits the subscription rate limit as its own meter', () => {
+    const frames = classify({
+      type: 'rate_limit_event',
+      session_id: 'sess-1',
+      rate_limit_info: {
+        status: 'allowed_warning',
+        rateLimitType: 'five_hour',
+        utilization: 82,
+        resetsAt: 1760000000,
+        isUsingOverage: false,
+      },
+    })
+
+    expect(frames).toEqual([
+      {
+        kind: 'rate-limit',
+        status: 'allowed_warning',
+        limitType: 'five_hour',
+        utilization: 82,
+        resetsAt: 1760000000,
+        usingOverage: false,
+      },
+    ])
   })
 })
