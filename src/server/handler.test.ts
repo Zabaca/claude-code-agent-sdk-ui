@@ -30,6 +30,112 @@ test('a Session streams Frames over SSE, each event carrying its index as id', a
   expect(events[0]?.data).toEqual({ kind: 'session', sessionId: 'session-abc' })
 })
 
+test('deltas stream live but the retained log holds coalesced whole Messages', async () => {
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('hello'))
+
+  fake.say(startsMessage())
+  fake.say(startsBlock(0, 'text'))
+  fake.say(delta(0, 'Hel'))
+  fake.say(delta(0, 'lo'))
+  fake.say(stopsBlock(0))
+  fake.say(says('Hello'))
+  fake.say(settled())
+
+  const events = await read(stream, 6)
+
+  expect(events.map((event) => event.name)).toEqual([
+    'partial',
+    'partial',
+    'partial',
+    'frame',
+    'frame',
+    'frame',
+  ])
+  expect(events.slice(0, 3).map((event) => event.data)).toEqual([
+    { block: 0, kind: 'text', text: 'Hel' },
+    { block: 0, kind: 'text', text: 'Hello' },
+    { block: 0, kind: 'text', text: 'Hello', done: true },
+  ])
+  // Partials carry no `id:`, so they never move the browser's resume cursor.
+  expect(events.slice(0, 3).map((event) => event.id)).toEqual([undefined, undefined, undefined])
+  expect(events[3]).toEqual({ id: '0', name: 'frame', data: { kind: 'text', text: 'Hello' } })
+
+  // What the log kept is whole Messages — a cold reload replays no partials.
+  const replayed = await read(await handler(open()), 3)
+  expect(replayed.map((event) => event.name)).toEqual(['frame', 'frame', 'frame'])
+  expect(replayed.map((event) => event.data['kind'])).toEqual(['text', 'settled', 'cost'])
+})
+
+test('a dropped connection resumes from Last-Event-ID', async () => {
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  await handler(prompt('hello'))
+  fake.say(init('session-abc'))
+  fake.say(says('Hello there'))
+  await read(await handler(open()), 4)
+
+  const resumed = await read(await handler(open('1')), 2)
+
+  expect(resumed.map((event) => event.id)).toEqual(['2', '3'])
+  expect(resumed.map((event) => event.data['kind'])).toEqual(['commands', 'text'])
+})
+
+test('an interrupt ends the Turn as idle, not as a failure', async () => {
+  const fake = fakeQuery()
+  fake.onInterrupt = (self) => self.say(aborted())
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('write a novel'))
+  fake.say(says('Once upon'))
+  await handler(interrupt())
+
+  const events = await read(stream, 2)
+
+  expect(fake.interrupts).toBe(1)
+  expect(events[1]).toEqual({
+    id: '1',
+    name: 'frame',
+    data: { kind: 'settled', turns: 1, durationMs: 30, terminalReason: 'aborted_streaming' },
+  })
+})
+
+test('an interrupt that kills the query still ends the Turn as idle', async () => {
+  const fake = fakeQuery()
+  fake.onInterrupt = (self) => self.break(new Error('The operation was aborted'))
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('write a novel'))
+  await handler(interrupt())
+
+  const events = await read(stream, 1)
+
+  expect(events[0]?.data).toEqual({ kind: 'settled' })
+})
+
+test('a query that breaks on its own does fail the Turn', async () => {
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('hello'))
+  fake.break(new Error('the runtime went away'))
+
+  const events = await read(stream, 1)
+
+  expect(events[0]?.data).toEqual({
+    kind: 'failed',
+    subtype: 'error_during_execution',
+    reason: 'the runtime went away',
+  })
+})
+
 // --- driving the seam ---------------------------------------------------------
 
 const endpoint = 'http://localhost/agent'
@@ -45,6 +151,14 @@ function prompt(text: string, extra: Record<string, unknown> = {}): Request {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'prompt', text, ...extra }),
+  })
+}
+
+function interrupt(): Request {
+  return new Request(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'interrupt' }),
   })
 }
 
@@ -121,6 +235,30 @@ function says(text: string): ClassifyInput {
   }
 }
 
+function streamEvent(event: Record<string, unknown>, thread: string | null = null): ClassifyInput {
+  return { type: 'stream_event', parent_tool_use_id: thread, event }
+}
+
+function startsMessage(): ClassifyInput {
+  return streamEvent({ type: 'message_start', message: { role: 'assistant', content: [] } })
+}
+
+function startsBlock(index: number, type: 'text' | 'thinking'): ClassifyInput {
+  return streamEvent({ type: 'content_block_start', index, content_block: { type, text: '' } })
+}
+
+function delta(index: number, text: string): ClassifyInput {
+  return streamEvent({
+    type: 'content_block_delta',
+    index,
+    delta: { type: 'text_delta', text },
+  })
+}
+
+function stopsBlock(index: number): ClassifyInput {
+  return streamEvent({ type: 'content_block_stop', index })
+}
+
 function settled(): ClassifyInput {
   return {
     type: 'result',
@@ -129,5 +267,17 @@ function settled(): ClassifyInput {
     num_turns: 1,
     duration_ms: 12,
     total_cost_usd: 0.001,
+  }
+}
+
+/** What the runtime reports for a Turn the person stopped. */
+function aborted(): ClassifyInput {
+  return {
+    type: 'result',
+    subtype: 'error_during_execution',
+    num_turns: 1,
+    duration_ms: 30,
+    terminal_reason: 'aborted_streaming',
+    errors: ['Request was aborted'],
   }
 }
