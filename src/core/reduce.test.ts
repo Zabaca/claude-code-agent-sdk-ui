@@ -474,3 +474,128 @@ describe('a hook firing', () => {
     expect(transcript.messages).toHaveLength(4)
   })
 })
+
+describe('what is true of the Session rather than of any one Message', () => {
+  test('carries the Session id, and what the runtime actually loaded', () => {
+    const transcript = transcriptOf([
+      {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-1',
+        model: 'claude-opus-4',
+        cwd: '/repo',
+        permissionMode: 'bypassPermissions',
+        apiKeySource: 'none',
+        output_style: 'default',
+        claude_code_version: '2.1.0',
+        tools: ['Read', 'Bash'],
+        agents: ['reviewer'],
+        skills: ['tdd'],
+        mcp_servers: [{ name: 'linear', status: 'connected' }],
+        plugins: [{ name: 'claude-mem', path: '/p', version: '1.0.0' }],
+        slash_commands: ['commit'],
+      },
+    ])
+
+    expect(transcript.sessionId).toBe('sess-1')
+    expect(transcript.harness).toEqual({
+      model: 'claude-opus-4',
+      cwd: '/repo',
+      permissionMode: 'bypassPermissions',
+      apiKeySource: 'none',
+      outputStyle: 'default',
+      version: '2.1.0',
+      tools: ['Read', 'Bash'],
+      agents: ['reviewer'],
+      skills: ['tdd'],
+      mcpServers: [{ name: 'linear', status: 'connected' }],
+      plugins: [{ name: 'claude-mem', path: '/p', version: '1.0.0' }],
+    })
+  })
+
+  test('lets a later init say more about the harness without erasing what it said', () => {
+    const transcript = transcriptOf([
+      { type: 'system', subtype: 'init', session_id: 'sess-1', model: 'opus', tools: ['Read'] },
+      { type: 'system', subtype: 'init', session_id: 'sess-1', model: 'sonnet' },
+    ])
+
+    expect(transcript.harness).toEqual({ model: 'sonnet', tools: ['Read'] })
+  })
+
+  test('replaces the slash commands when the runtime pushes a new list mid-Session', () => {
+    const transcript = transcriptOf([
+      { type: 'system', subtype: 'init', session_id: 'sess-1', slash_commands: ['commit'] },
+      {
+        type: 'system',
+        subtype: 'commands_changed',
+        commands: [{ name: 'ship', description: 'Ship it', argumentHint: '<n>', aliases: ['go'] }],
+      },
+    ])
+
+    expect(transcript.commands).toEqual([
+      { name: 'ship', description: 'Ship it', argumentHint: '<n>', aliases: ['go'] },
+    ])
+  })
+
+  test('keeps the context meter and the subscription meter apart', () => {
+    const transcript = transcriptOf([
+      {
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: { role: 'assistant', content: [] },
+        context_usage: { model: 'opus', total_tokens: 120000, raw_max_tokens: 200000 },
+      },
+      {
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'allowed_warning', rateLimitType: 'five_hour', utilization: 82 },
+      },
+    ])
+
+    expect(transcript.context).toEqual({
+      model: 'opus',
+      totalTokens: 120000,
+      maxTokens: 200000,
+    })
+    expect(transcript.rateLimit).toEqual({
+      status: 'allowed_warning',
+      limitType: 'five_hour',
+      utilization: 82,
+    })
+  })
+
+  test('keeps the running cost, which the runtime restates in full each Turn', () => {
+    const transcript = transcriptOf([
+      { type: 'result', subtype: 'success', result: 'a', total_cost_usd: 0.01 },
+      { type: 'result', subtype: 'success', result: 'b', total_cost_usd: 0.05 },
+    ])
+
+    expect(transcript.cost).toEqual({ usd: 0.05 })
+  })
+})
+
+describe('the agent s deliberation', () => {
+  const stream = [
+    assistant([
+      { type: 'thinking', thinking: 'They want ' },
+      { type: 'text', text: 'Here it is.' },
+    ]),
+    assistant([{ type: 'thinking', thinking: 'a diff.' }]),
+  ]
+
+  test('stays out of the Transcript by default, because thinking is not an answer', () => {
+    expect(transcriptOf(stream).messages).toEqual([{ kind: 'text', text: 'Here it is.' }])
+  })
+
+  test('comes back in, accumulated, when it is asked for', () => {
+    const transcript = reduce(
+      stream.flatMap((message) => classify(message)),
+      { reasoning: true },
+    )
+
+    expect(transcript.messages).toEqual([
+      { kind: 'reasoning', text: 'They want ' },
+      { kind: 'text', text: 'Here it is.' },
+      { kind: 'reasoning', text: 'a diff.' },
+    ])
+  })
+})

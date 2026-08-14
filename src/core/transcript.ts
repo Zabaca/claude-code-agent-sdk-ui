@@ -1,4 +1,13 @@
-import type { PromptOrigin, RecalledMemory, ThreadOpened } from './frame.ts'
+import type {
+  ContextFrame,
+  CostFrame,
+  HarnessFrame,
+  PromptOrigin,
+  RateLimitFrame,
+  RecalledMemory,
+  SlashCommandInfo,
+  ThreadOpened,
+} from './frame.ts'
 
 /**
  * The Transcript is the ordered list of Messages a viewer sees, plus what is
@@ -15,7 +24,30 @@ export type Transcript = {
   messages: Message[]
   /** Where the Turn now running — or the one that just ended — stands. */
   turn: Turn
+  /** The Session's id, known the instant the runtime reports it. */
+  sessionId?: string
+  /** What the runtime actually loaded, as opposed to what was configured. */
+  harness?: Harness
+  /** The slash commands the runtime advertises, as last advertised. */
+  commands: SlashCommandInfo[]
+  /** How full the context window is. A different meter from the rate limit. */
+  context?: ContextUsage
+  /** How much of the subscription is left. A different meter from the context. */
+  rateLimit?: RateLimit
+  /** What the Session has spent, as the runtime last restated it. */
+  cost?: Cost
 }
+
+/**
+ * These four are the latest word on a Session-wide fact rather than an entry in
+ * the Transcript, so they are state, not Messages. Each is its Frame minus the
+ * discriminator, so a field added to the Frame vocabulary reaches the Transcript
+ * without anyone having to remember to copy it across.
+ */
+export type Harness = Omit<HarnessFrame, 'kind'>
+export type ContextUsage = Omit<ContextFrame, 'kind'>
+export type RateLimit = Omit<RateLimitFrame, 'kind'>
+export type Cost = Omit<CostFrame, 'kind'>
 
 /**
  * The state of the latest Turn. An interrupt is idle, never a failure: aborting

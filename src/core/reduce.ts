@@ -6,6 +6,7 @@ import type {
   Message,
   OutcomeMessage,
   PromptMessage,
+  ReasoningMessage,
   RecallMessage,
   TextMessage,
   ToolCallMessage,
@@ -20,8 +21,9 @@ import type {
  * log twice produces an identical Transcript, and the log itself is never
  * mutated.
  */
-export function reduce(frames: readonly Frame[]): Transcript {
+export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): Transcript {
   const messages: Message[] = []
+  const state: SessionState = { commands: [] }
   /** Where each open call sits, so its answer patches it rather than appends. */
   const calls = new Map<string, number>()
   /** Where each identified hook sits, so its later Frames patch one Message. */
@@ -78,6 +80,47 @@ export function reduce(frames: readonly Frame[]): Transcript {
           output: frame.output,
           structured: frame.structured,
         })
+        break
+      }
+      case 'reasoning': {
+        // Kept out of the Transcript unless asked for: thinking is not an
+        // answer. Nothing else in the Frame vocabulary is withheld.
+        if (options.reasoning !== true) break
+        const tail = messages.at(-1)
+        if (tail?.kind === 'reasoning' && tail.thread === frame.thread) {
+          messages[messages.length - 1] = { ...tail, text: tail.text + frame.text }
+          break
+        }
+        messages.push(
+          compact<ReasoningMessage>({ kind: 'reasoning', text: frame.text, thread: frame.thread }),
+        )
+        break
+      }
+      case 'session':
+        state.sessionId = frame.sessionId
+        break
+      case 'harness': {
+        const { kind, ...harness } = frame
+        // A later init says more about the harness; it does not unsay the rest.
+        state.harness = { ...state.harness, ...harness }
+        break
+      }
+      case 'commands':
+        state.commands = frame.commands
+        break
+      case 'context': {
+        const { kind, ...context } = frame
+        state.context = context
+        break
+      }
+      case 'rate-limit': {
+        const { kind, ...rateLimit } = frame
+        state.rateLimit = rateLimit
+        break
+      }
+      case 'cost': {
+        const { kind, ...cost } = frame
+        state.cost = cost
         break
       }
       case 'image':
@@ -177,8 +220,20 @@ export function reduce(frames: readonly Frame[]): Transcript {
     }
   }
 
-  return { messages, turn }
+  return { ...compact<SessionState>(state), messages, turn }
 }
+
+/** What `reduce` reads besides the Frames. */
+export type ReduceOptions = {
+  /**
+   * Put the agent's deliberation in the Transcript. Off by default, following
+   * "thinking is not an answer" — turn it on to watch a prompt being debugged.
+   */
+  reasoning?: boolean
+}
+
+/** The parts of a Transcript that are Session-wide facts, not Messages. */
+type SessionState = Omit<Transcript, 'messages' | 'turn'>
 
 /**
  * The runtime's two terminal reasons for an abort. A Turn that ends this way
