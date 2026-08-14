@@ -2,7 +2,14 @@ import type { Options } from '@anthropic-ai/claude-agent-sdk'
 
 import { classify, type ClassifyInput } from '../core/classify.ts'
 import type { FailedFrame, Frame, SettledFrame } from '../core/frame.ts'
+import type { PartialText } from '../core/partial.ts'
 import { pushable, type Pushable } from './pushable.ts'
+
+// The willed half of the vocabulary, and the live text that is neither half,
+// both live in `core` beside the Frames — one glossary, one place. Re-exported
+// here so that everything that reached for them through the handler still can.
+export type { AgentEvent, InterruptEvent, PromptEvent } from '../core/event.ts'
+export type { PartialText } from '../core/partial.ts'
 
 /**
  * One handler, one Session (ADR-0002). It hosts the SDK's `query()`, classifies
@@ -38,9 +45,6 @@ export type AgentHandlerOptions = {
    */
   createQuery?: AgentQueryFactory
 }
-
-/** An Event — something a person willed, as opposed to a Frame, which is observed. */
-export type AgentEvent = { type: 'prompt'; text: string } | { type: 'interrupt' }
 
 export type AgentQueryFactory = (params: AgentQueryParams) => AgentQuery
 
@@ -78,25 +82,6 @@ export type AgentQueryOptions = Pick<
 export type AgentQuery = AsyncIterable<ClassifyInput> & {
   interrupt(): Promise<unknown>
   close?(): void
-}
-
-/**
- * Partial text on the wire. Deliberately not a Frame: a Frame is what the log
- * retains and what `reduce` consumes, and the log holds whole Messages. These
- * events carry no `id:`, so they never move the browser's `Last-Event-ID` and a
- * reconnect loses nothing by skipping them.
- */
-export type PartialText = {
-  /** The content block, as the SDK indexes it within the Message. */
-  block: number
-  /** Which Frame the block becomes once it closes. */
-  kind: 'text' | 'reasoning'
-  /** Everything the block holds so far. Replace what you had; do not append. */
-  text: string
-  /** The block closed: this is the whole of it, and its Frame follows. */
-  done?: true
-  /** The Thread this work belongs to; absent for the agent's own work. */
-  thread?: string
 }
 
 export function createAgentHandler(options: AgentHandlerOptions = {}): AgentHandler {

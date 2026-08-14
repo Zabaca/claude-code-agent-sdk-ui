@@ -15,8 +15,12 @@
  *     the next value rather than keeping any of it. Offered upstream.
  *   - upstream's bare `term-input` hook class is namespaced to `cc-term-input`;
  *     it is a styling hook for consumers, not a Tailwind utility
+ *   - `ClaudeMode` and `ClaudeEffort` are defined in `core/composer.ts` and
+ *     re-exported here unchanged, so that `react` can name a mode without
+ *     depending on `ui`. The contract is identical and re-syncing is unaffected
  */
 import * as React from "react";
+import type { ClaudeEffort, ClaudeMode } from "../core/composer.ts";
 import { cn } from "./lib/cn.ts";
 
 /**
@@ -33,15 +37,7 @@ import { cn } from "./lib/cn.ts";
  *   low ○ · medium ◐ · high ● · xhigh ◉ · max ◈ · ultracode ✦
  * Ultracode also paints the prompt rules as a rainbow cycle.
  */
-export type ClaudeMode = "auto" | "manual" | "accept-edits" | "plan";
-
-export type ClaudeEffort =
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max"
-  | "ultracode";
+export type { ClaudeEffort, ClaudeMode };
 
 const MODES: Record<
   ClaudeMode,
