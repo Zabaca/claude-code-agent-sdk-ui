@@ -1,0 +1,388 @@
+[
+  {
+    "kind": "session",
+    "sessionId": "sess-golden"
+  },
+  {
+    "kind": "harness",
+    "model": "claude-opus-4",
+    "cwd": "/repo",
+    "permissionMode": "bypassPermissions",
+    "apiKeySource": "none",
+    "outputStyle": "default",
+    "version": "2.1.0",
+    "tools": [
+      "Read",
+      "Edit",
+      "Bash",
+      "Task"
+    ],
+    "agents": [
+      "code-reviewer"
+    ],
+    "skills": [
+      "tdd"
+    ],
+    "mcpServers": [
+      {
+        "name": "linear",
+        "status": "connected"
+      }
+    ],
+    "plugins": [
+      {
+        "name": "claude-mem",
+        "path": "/plugins/claude-mem",
+        "version": "1.4.0"
+      }
+    ]
+  },
+  {
+    "kind": "commands",
+    "commands": [
+      {
+        "name": "commit"
+      },
+      {
+        "name": "review"
+      }
+    ]
+  },
+  {
+    "kind": "prompt",
+    "text": "review the diff and fix what it finds"
+  },
+  {
+    "kind": "reasoning",
+    "text": "A review first, then the fix."
+  },
+  {
+    "kind": "text",
+    "text": "Delegating the review."
+  },
+  {
+    "kind": "tool-call",
+    "id": "toolu_task",
+    "name": "Task",
+    "input": {
+      "description": "Review the diff",
+      "subagent_type": "code-reviewer",
+      "prompt": "Review the working tree."
+    },
+    "opens": {
+      "thread": "toolu_task",
+      "description": "Review the diff",
+      "subagentType": "code-reviewer"
+    }
+  },
+  {
+    "kind": "text",
+    "text": "Reading ",
+    "thread": "toolu_task"
+  },
+  {
+    "kind": "text",
+    "text": "the file.",
+    "thread": "toolu_task"
+  },
+  {
+    "kind": "tool-call",
+    "id": "toolu_read",
+    "name": "Read",
+    "input": {
+      "file_path": "/repo/src/a.ts"
+    },
+    "thread": "toolu_task"
+  },
+  {
+    "kind": "tool-result",
+    "id": "toolu_read",
+    "output": "export const a = 1",
+    "isError": false,
+    "thread": "toolu_task"
+  },
+  {
+    "kind": "hook",
+    "id": "hook-1",
+    "name": "format-on-edit",
+    "hookEvent": "PostToolUse",
+    "status": "started"
+  },
+  {
+    "kind": "hook",
+    "id": "hook-1",
+    "name": "format-on-edit",
+    "hookEvent": "PostToolUse",
+    "status": "running",
+    "output": "formatting…"
+  },
+  {
+    "kind": "hook",
+    "id": "hook-1",
+    "name": "format-on-edit",
+    "hookEvent": "PostToolUse",
+    "status": "success",
+    "output": "formatted 1 file",
+    "stdout": "formatted 1 file",
+    "stderr": "",
+    "exitCode": 0
+  },
+  {
+    "kind": "tool-result",
+    "id": "toolu_task",
+    "output": "One nit: a should be 2.",
+    "isError": false
+  },
+  {
+    "kind": "tool-call",
+    "id": "toolu_edit",
+    "name": "Edit",
+    "input": {
+      "file_path": "/repo/src/a.ts",
+      "old_string": "1",
+      "new_string": "2"
+    }
+  },
+  {
+    "kind": "tool-result",
+    "id": "toolu_edit",
+    "output": "Edited.",
+    "isError": false,
+    "structured": {
+      "filePath": "/repo/src/a.ts",
+      "structuredPatch": [
+        {
+          "oldStart": 1,
+          "oldLines": 1,
+          "newStart": 1,
+          "newLines": 1,
+          "lines": [
+            "-export const a = 1",
+            "+export const a = 2"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "kind": "tool-call",
+    "id": "toolu_shot",
+    "name": "Screenshot",
+    "input": {
+      "selector": "body"
+    }
+  },
+  {
+    "kind": "tool-result",
+    "id": "toolu_shot",
+    "output": "Captured.",
+    "isError": false
+  },
+  {
+    "kind": "image",
+    "mediaType": "image/png",
+    "data": "iVBORw0KGgo=",
+    "toolCallId": "toolu_shot"
+  },
+  {
+    "kind": "recall",
+    "mode": "select",
+    "memories": [
+      {
+        "path": "/memories/ports.md",
+        "scope": "personal",
+        "content": "Prefers Bun."
+      }
+    ]
+  },
+  {
+    "kind": "rate-limit",
+    "status": "allowed_warning",
+    "limitType": "five_hour",
+    "utilization": 82,
+    "resetsAt": 1760000000,
+    "usingOverage": false
+  },
+  {
+    "kind": "compacted",
+    "trigger": "auto",
+    "preTokens": 180000,
+    "postTokens": 42000,
+    "durationMs": 3100
+  },
+  {
+    "kind": "text",
+    "text": "Fixed it."
+  },
+  {
+    "kind": "context",
+    "model": "claude-opus-4",
+    "totalTokens": 44000,
+    "maxTokens": 200000,
+    "percentage": 22,
+    "categories": [
+      {
+        "name": "Messages",
+        "tokens": 30000,
+        "kind": "used"
+      },
+      {
+        "name": "Free space",
+        "tokens": 156000,
+        "kind": "free"
+      }
+    ],
+    "mcpTools": [
+      {
+        "name": "mcp__linear__create_issue",
+        "serverName": "linear",
+        "tokens": 800
+      }
+    ],
+    "memoryFiles": [
+      {
+        "path": "/repo/CLAUDE.md",
+        "type": "Project",
+        "tokens": 1200
+      }
+    ],
+    "agents": [
+      {
+        "agentType": "code-reviewer",
+        "source": "projectSettings",
+        "tokens": 400
+      }
+    ],
+    "skills": [
+      {
+        "name": "tdd",
+        "source": "plugin",
+        "pluginName": "mattpocock-skills",
+        "tokens": 300
+      }
+    ]
+  },
+  {
+    "kind": "settled",
+    "result": "Fixed it.",
+    "turns": 6,
+    "durationMs": 42000,
+    "stopReason": "end_turn",
+    "terminalReason": "completed"
+  },
+  {
+    "kind": "cost",
+    "usd": 0.0412,
+    "turns": 6,
+    "durationMs": 42000,
+    "usage": {
+      "inputTokens": 1200,
+      "outputTokens": 450,
+      "cacheReadInputTokens": 90000,
+      "cacheCreationInputTokens": 3000
+    },
+    "byModel": {
+      "claude-opus-4": {
+        "costUsd": 0.0412,
+        "inputTokens": 1200,
+        "outputTokens": 450
+      }
+    }
+  },
+  {
+    "kind": "image",
+    "mediaType": "image/png",
+    "data": "iVBORpasted="
+  },
+  {
+    "kind": "prompt",
+    "text": "now match this design"
+  },
+  {
+    "kind": "text",
+    "text": "Starting on it"
+  },
+  {
+    "kind": "failed",
+    "subtype": "error_during_execution",
+    "reason": "error_during_execution",
+    "turns": 1,
+    "durationMs": 2400,
+    "terminalReason": "aborted_streaming"
+  },
+  {
+    "kind": "cost",
+    "usd": 0.0433,
+    "turns": 1,
+    "durationMs": 2400,
+    "usage": {
+      "inputTokens": 1400,
+      "outputTokens": 20
+    },
+    "byModel": {
+      "claude-opus-4": {
+        "costUsd": 0.0433,
+        "inputTokens": 1400,
+        "outputTokens": 20
+      }
+    }
+  },
+  {
+    "kind": "commands",
+    "commands": [
+      {
+        "name": "commit",
+        "description": "Commit",
+        "argumentHint": "<message>",
+        "aliases": [
+          "ci"
+        ]
+      },
+      {
+        "name": "ship",
+        "description": "Ship the backlog"
+      }
+    ]
+  },
+  {
+    "kind": "prompt",
+    "text": "run the nightly checks",
+    "synthetic": true,
+    "origin": {
+      "kind": "peer",
+      "from": "agent-7",
+      "name": "Scout",
+      "server": "nightly"
+    }
+  },
+  {
+    "kind": "failed",
+    "subtype": "error_max_turns",
+    "reason": "Reached the maximum number of turns",
+    "turns": 40,
+    "durationMs": 90000,
+    "stopReason": "max_turns",
+    "terminalReason": "max_turns"
+  },
+  {
+    "kind": "cost",
+    "usd": 1.51,
+    "turns": 40,
+    "durationMs": 90000,
+    "usage": {
+      "inputTokens": 90000,
+      "outputTokens": 12000
+    },
+    "byModel": {
+      "claude-opus-4": {
+        "costUsd": 1.51,
+        "inputTokens": 90000,
+        "outputTokens": 12000
+      }
+    }
+  },
+  {
+    "kind": "reset",
+    "transcriptId": "conv-2"
+  }
+]

@@ -1,0 +1,391 @@
+[
+  {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "sess-golden",
+    "uuid": "u-001",
+    "model": "claude-opus-4",
+    "cwd": "/repo",
+    "permissionMode": "bypassPermissions",
+    "apiKeySource": "none",
+    "output_style": "default",
+    "claude_code_version": "2.1.0",
+    "tools": ["Read", "Edit", "Bash", "Task"],
+    "agents": ["code-reviewer"],
+    "skills": ["tdd"],
+    "mcp_servers": [{ "name": "linear", "status": "connected" }],
+    "plugins": [{ "name": "claude-mem", "path": "/plugins/claude-mem", "version": "1.4.0" }],
+    "slash_commands": ["commit", "review"]
+  },
+  {
+    "type": "user",
+    "session_id": "sess-golden",
+    "uuid": "u-002",
+    "parent_tool_use_id": null,
+    "message": { "role": "user", "content": "review the diff and fix what it finds" }
+  },
+  {
+    "type": "assistant",
+    "session_id": "sess-golden",
+    "uuid": "u-003",
+    "parent_tool_use_id": null,
+    "message": {
+      "role": "assistant",
+      "content": [
+        { "type": "thinking", "thinking": "A review first, then the fix." },
+        { "type": "text", "text": "Delegating the review." }
+      ]
+    }
+  },
+  {
+    "type": "assistant",
+    "session_id": "sess-golden",
+    "uuid": "u-004",
+    "parent_tool_use_id": null,
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_task",
+          "name": "Task",
+          "input": {
+            "description": "Review the diff",
+            "subagent_type": "code-reviewer",
+            "prompt": "Review the working tree."
+          }
+        }
+      ]
+    }
+  },
+  {
+    "type": "assistant",
+    "session_id": "sess-golden",
+    "uuid": "u-005",
+    "parent_tool_use_id": "toolu_task",
+    "message": { "role": "assistant", "content": [{ "type": "text", "text": "Reading " }] }
+  },
+  {
+    "type": "assistant",
+    "session_id": "sess-golden",
+    "uuid": "u-006",
+    "parent_tool_use_id": "toolu_task",
+    "message": { "role": "assistant", "content": [{ "type": "text", "text": "the file." }] }
+  },
+  {
+    "type": "assistant",
+    "session_id": "sess-golden",
+    "uuid": "u-007",
+    "parent_tool_use_id": "toolu_task",
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_read",
+          "name": "Read",
+          "input": { "file_path": "/repo/src/a.ts" }
+        }
+      ]
+    }
+  },
+  {
+    "type": "user",
+    "session_id": "sess-golden",
+    "uuid": "u-008",
+    "parent_tool_use_id": "toolu_task",
+    "message": {
+      "role": "user",
+      "content": [
+        { "type": "tool_result", "tool_use_id": "toolu_read", "content": "export const a = 1" }
+      ]
+    }
+  },
+  {
+    "type": "system",
+    "subtype": "hook_started",
+    "session_id": "sess-golden",
+    "uuid": "u-009",
+    "hook_id": "hook-1",
+    "hook_name": "format-on-edit",
+    "hook_event": "PostToolUse"
+  },
+  {
+    "type": "system",
+    "subtype": "hook_progress",
+    "session_id": "sess-golden",
+    "uuid": "u-010",
+    "hook_id": "hook-1",
+    "hook_name": "format-on-edit",
+    "hook_event": "PostToolUse",
+    "output": "formatting…"
+  },
+  {
+    "type": "system",
+    "subtype": "hook_response",
+    "session_id": "sess-golden",
+    "uuid": "u-011",
+    "hook_id": "hook-1",
+    "hook_name": "format-on-edit",
+    "hook_event": "PostToolUse",
+    "outcome": "success",
+    "output": "formatted 1 file",
+    "stdout": "formatted 1 file",
+    "stderr": "",
+    "exit_code": 0
+  },
+  {
+    "type": "user",
+    "session_id": "sess-golden",
+    "uuid": "u-012",
+    "parent_tool_use_id": null,
+    "message": {
+      "role": "user",
+      "content": [
+        { "type": "tool_result", "tool_use_id": "toolu_task", "content": "One nit: a should be 2." }
+      ]
+    }
+  },
+  {
+    "type": "assistant",
+    "session_id": "sess-golden",
+    "uuid": "u-013",
+    "parent_tool_use_id": null,
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_edit",
+          "name": "Edit",
+          "input": { "file_path": "/repo/src/a.ts", "old_string": "1", "new_string": "2" }
+        }
+      ]
+    }
+  },
+  {
+    "type": "user",
+    "session_id": "sess-golden",
+    "uuid": "u-014",
+    "parent_tool_use_id": null,
+    "message": {
+      "role": "user",
+      "content": [{ "type": "tool_result", "tool_use_id": "toolu_edit", "content": "Edited." }]
+    },
+    "tool_use_result": {
+      "filePath": "/repo/src/a.ts",
+      "structuredPatch": [
+        {
+          "oldStart": 1,
+          "oldLines": 1,
+          "newStart": 1,
+          "newLines": 1,
+          "lines": ["-export const a = 1", "+export const a = 2"]
+        }
+      ]
+    }
+  },
+  {
+    "type": "assistant",
+    "session_id": "sess-golden",
+    "uuid": "u-015",
+    "parent_tool_use_id": null,
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_shot",
+          "name": "Screenshot",
+          "input": { "selector": "body" }
+        }
+      ]
+    }
+  },
+  {
+    "type": "user",
+    "session_id": "sess-golden",
+    "uuid": "u-016",
+    "parent_tool_use_id": null,
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_shot",
+          "content": [
+            { "type": "text", "text": "Captured." },
+            {
+              "type": "image",
+              "source": { "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo=" }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "type": "system",
+    "subtype": "memory_recall",
+    "session_id": "sess-golden",
+    "uuid": "u-017",
+    "mode": "select",
+    "memories": [{ "path": "/memories/ports.md", "scope": "personal", "content": "Prefers Bun." }]
+  },
+  {
+    "type": "rate_limit_event",
+    "session_id": "sess-golden",
+    "uuid": "u-018",
+    "rate_limit_info": {
+      "status": "allowed_warning",
+      "rateLimitType": "five_hour",
+      "utilization": 82,
+      "resetsAt": 1760000000,
+      "isUsingOverage": false
+    }
+  },
+  {
+    "type": "system",
+    "subtype": "compact_boundary",
+    "session_id": "sess-golden",
+    "uuid": "u-019",
+    "compact_metadata": {
+      "trigger": "auto",
+      "pre_tokens": 180000,
+      "post_tokens": 42000,
+      "duration_ms": 3100
+    }
+  },
+  {
+    "type": "assistant",
+    "session_id": "sess-golden",
+    "uuid": "u-020",
+    "parent_tool_use_id": null,
+    "message": { "role": "assistant", "content": [{ "type": "text", "text": "Fixed it." }] },
+    "context_usage": {
+      "model": "claude-opus-4",
+      "total_tokens": 44000,
+      "raw_max_tokens": 200000,
+      "percentage": 22,
+      "categories": [
+        { "name": "Messages", "tokens": 30000, "kind": "used" },
+        { "name": "Free space", "tokens": 156000, "kind": "free" }
+      ],
+      "mcp_tools": [
+        { "name": "mcp__linear__create_issue", "server_name": "linear", "tokens": 800 }
+      ],
+      "memory_files": [{ "path": "/repo/CLAUDE.md", "type": "Project", "tokens": 1200 }],
+      "agents": [{ "agent_type": "code-reviewer", "source": "projectSettings", "tokens": 400 }],
+      "skills": [
+        { "name": "tdd", "source": "plugin", "plugin_name": "mattpocock-skills", "tokens": 300 }
+      ]
+    }
+  },
+  {
+    "type": "result",
+    "subtype": "success",
+    "session_id": "sess-golden",
+    "uuid": "u-021",
+    "result": "Fixed it.",
+    "num_turns": 6,
+    "duration_ms": 42000,
+    "duration_api_ms": 39000,
+    "stop_reason": "end_turn",
+    "terminal_reason": "completed",
+    "total_cost_usd": 0.0412,
+    "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 450,
+      "cache_read_input_tokens": 90000,
+      "cache_creation_input_tokens": 3000
+    },
+    "modelUsage": {
+      "claude-opus-4": { "costUSD": 0.0412, "inputTokens": 1200, "outputTokens": 450 }
+    }
+  },
+  {
+    "type": "user",
+    "session_id": "sess-golden",
+    "uuid": "u-022",
+    "parent_tool_use_id": null,
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "image",
+          "source": { "type": "base64", "media_type": "image/png", "data": "iVBORpasted=" }
+        },
+        { "type": "text", "text": "now match this design" }
+      ]
+    }
+  },
+  {
+    "type": "assistant",
+    "session_id": "sess-golden",
+    "uuid": "u-023",
+    "parent_tool_use_id": null,
+    "message": { "role": "assistant", "content": [{ "type": "text", "text": "Starting on it" }] }
+  },
+  {
+    "type": "result",
+    "subtype": "error_during_execution",
+    "session_id": "sess-golden",
+    "uuid": "u-024",
+    "is_error": true,
+    "num_turns": 1,
+    "duration_ms": 2400,
+    "duration_api_ms": 2100,
+    "stop_reason": null,
+    "terminal_reason": "aborted_streaming",
+    "errors": [],
+    "total_cost_usd": 0.0433,
+    "usage": { "input_tokens": 1400, "output_tokens": 20 },
+    "modelUsage": { "claude-opus-4": { "costUSD": 0.0433, "inputTokens": 1400, "outputTokens": 20 } }
+  },
+  {
+    "type": "system",
+    "subtype": "commands_changed",
+    "session_id": "sess-golden",
+    "uuid": "u-025",
+    "commands": [
+      { "name": "commit", "description": "Commit", "argumentHint": "<message>", "aliases": ["ci"] },
+      { "name": "ship", "description": "Ship the backlog" }
+    ]
+  },
+  {
+    "type": "user",
+    "session_id": "sess-golden",
+    "uuid": "u-026",
+    "parent_tool_use_id": null,
+    "isSynthetic": true,
+    "origin": { "kind": "peer", "from": "agent-7", "name": "Scout", "server": "nightly" },
+    "message": { "role": "user", "content": "run the nightly checks" }
+  },
+  {
+    "type": "result",
+    "subtype": "error_max_turns",
+    "session_id": "sess-golden",
+    "uuid": "u-027",
+    "is_error": true,
+    "num_turns": 40,
+    "duration_ms": 90000,
+    "duration_api_ms": 88000,
+    "stop_reason": "max_turns",
+    "terminal_reason": "max_turns",
+    "errors": ["Reached the maximum number of turns"],
+    "total_cost_usd": 1.51,
+    "usage": { "input_tokens": 90000, "output_tokens": 12000 },
+    "modelUsage": { "claude-opus-4": { "costUSD": 1.51, "inputTokens": 90000, "outputTokens": 12000 } }
+  },
+  {
+    "type": "conversation_reset",
+    "session_id": "sess-golden",
+    "uuid": "u-028",
+    "new_conversation_id": "conv-2"
+  },
+  {
+    "type": "quantum_entanglement_event",
+    "session_id": "sess-golden",
+    "uuid": "u-029"
+  }
+]
