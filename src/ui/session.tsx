@@ -45,6 +45,17 @@ export function ClaudeSession({
         className,
       )}
       style={{ color: 'var(--cc-fg)' }}
+      onKeyDown={(event) => {
+        // The working line says "esc to interrupt", so esc must interrupt —
+        // and from anywhere in the Session, not only from the input, because
+        // that is where a person's hands are after expanding a tool call.
+        //
+        // Only while a Turn is running: an interrupt willed against an idle
+        // Session is a request nobody made.
+        if (event.key !== 'Escape' || !working) return
+        event.preventDefault()
+        session.interrupt()
+      }}
     >
       {header}
 
@@ -75,14 +86,6 @@ export function ClaudeSession({
           // either way, as the terminal's is.
           session.send(value)
           setText('')
-        }}
-        onKeyDown={(event) => {
-          // The working line says "esc to interrupt", so esc must interrupt.
-          // Only while a Turn is running: an interrupt willed against an idle
-          // Session is a request nobody made.
-          if (event.key !== 'Escape' || !working) return
-          event.preventDefault()
-          session.interrupt()
         }}
         placeholder={placeholder}
         mode={session.mode}

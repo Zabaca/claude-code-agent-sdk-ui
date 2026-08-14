@@ -199,6 +199,25 @@ test('esc interrupts a running Turn, and does nothing when none is running', asy
   view.unmount()
 })
 
+test('esc interrupts from anywhere in the Session, not only from the input', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'write a novel' })
+    fake.frame({ kind: 'tool-call', id: 'toolu_read', name: 'Read', input: { path: '/a.ts' } })
+  })
+
+  // Hands on a tool line, which is where they are after expanding one.
+  await act(async () => {
+    fireEvent.keyDown(line('Read'), { key: 'Escape' })
+  })
+
+  expect(wire.posted).toEqual([{ body: { type: 'interrupt' } }])
+  view.unmount()
+})
+
 test('the working line is on screen only while the Turn runs', async () => {
   const fake = fakeSse()
   const view = await mount(fake)
