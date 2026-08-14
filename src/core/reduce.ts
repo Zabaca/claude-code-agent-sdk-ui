@@ -1,8 +1,12 @@
 import type { FailedFrame, Frame } from './frame.ts'
 import type {
+  CompactedMessage,
+  HookMessage,
+  ImageMessage,
   Message,
   OutcomeMessage,
   PromptMessage,
+  RecallMessage,
   TextMessage,
   ToolCallMessage,
   Transcript,
@@ -20,6 +24,8 @@ export function reduce(frames: readonly Frame[]): Transcript {
   const messages: Message[] = []
   /** Where each open call sits, so its answer patches it rather than appends. */
   const calls = new Map<string, number>()
+  /** Where each identified hook sits, so its later Frames patch one Message. */
+  const hooks = new Map<string, number>()
   let turn: Turn = { status: 'idle' }
 
   for (const frame of frames) {
@@ -72,6 +78,65 @@ export function reduce(frames: readonly Frame[]): Transcript {
           output: frame.output,
           structured: frame.structured,
         })
+        break
+      }
+      case 'image':
+        messages.push(
+          compact<ImageMessage>({
+            kind: 'image',
+            mediaType: frame.mediaType,
+            data: frame.data,
+            url: frame.url,
+            toolCallId: frame.toolCallId,
+            thread: frame.thread,
+          }),
+        )
+        break
+      case 'compacted':
+        messages.push(
+          compact<CompactedMessage>({
+            kind: 'compacted',
+            trigger: frame.trigger,
+            preTokens: frame.preTokens,
+            postTokens: frame.postTokens,
+            durationMs: frame.durationMs,
+          }),
+        )
+        break
+      case 'reset':
+        messages.push({ kind: 'reset', transcriptId: frame.transcriptId })
+        break
+      case 'recall':
+        messages.push(
+          compact<RecallMessage>({
+            kind: 'recall',
+            mode: frame.mode,
+            memories: frame.memories,
+          }),
+        )
+        break
+      case 'hook': {
+        const hook = compact<HookMessage>({
+          kind: 'hook',
+          id: frame.id,
+          name: frame.name,
+          hookEvent: frame.hookEvent,
+          status: frame.status,
+          output: frame.output,
+          stdout: frame.stdout,
+          stderr: frame.stderr,
+          exitCode: frame.exitCode,
+        })
+        // One hook is one Message: later Frames say more about the same run.
+        // A hook the runtime did not identify cannot be recognised again, so
+        // each of its Frames stands on its own.
+        const at = frame.id === undefined ? undefined : hooks.get(frame.id)
+        if (at === undefined) {
+          if (frame.id !== undefined) hooks.set(frame.id, messages.length)
+          messages.push(hook)
+          break
+        }
+        messages[at] = { ...(messages[at] as HookMessage), ...hook }
         break
       }
       case 'settled':

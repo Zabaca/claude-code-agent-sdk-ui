@@ -1,4 +1,4 @@
-import type { PromptOrigin, ThreadOpened } from './frame.ts'
+import type { PromptOrigin, RecalledMemory, ThreadOpened } from './frame.ts'
 
 /**
  * The Transcript is the ordered list of Messages a viewer sees, plus what is
@@ -36,7 +36,17 @@ export type Turn = {
  */
 export type TurnStatus = 'idle' | 'working' | 'failed'
 
-export type Message = PromptMessage | TextMessage | ToolCallMessage | OutcomeMessage
+export type Message =
+  | PromptMessage
+  | TextMessage
+  | ReasoningMessage
+  | ToolCallMessage
+  | ImageMessage
+  | CompactedMessage
+  | ResetMessage
+  | RecallMessage
+  | HookMessage
+  | OutcomeMessage
 
 /** A person's words. */
 export type PromptMessage = {
@@ -53,6 +63,16 @@ export type PromptMessage = {
 /** A stretch of the agent's prose. */
 export type TextMessage = {
   kind: 'text'
+  text: string
+  thread?: string
+}
+
+/**
+ * The agent's deliberation. Kept out of the Transcript unless `reduce` is asked
+ * for it: thinking is not an answer.
+ */
+export type ReasoningMessage = {
+  kind: 'reasoning'
   text: string
   thread?: string
 }
@@ -80,6 +100,62 @@ export type ToolCallMessage = {
 
 /** `pending` until the tool answers; then whether it answered or failed. */
 export type ToolStatus = 'pending' | 'success' | 'error'
+
+/** An image in the Transcript — pasted by a person, or shown by the agent. */
+export type ImageMessage = {
+  kind: 'image'
+  mediaType?: string
+  /** Base64 payload, when the image arrived inline. */
+  data?: string
+  /** Location, when the image arrived by reference. */
+  url?: string
+  /** The tool call that produced it, when the agent showed it. */
+  toolCallId?: string
+  thread?: string
+}
+
+/**
+ * Where context was compacted. Without this the Transcript looks identical
+ * before and after, while what the agent can see has become a summary.
+ */
+export type CompactedMessage = {
+  kind: 'compacted'
+  trigger?: 'manual' | 'auto' | string
+  preTokens?: number
+  postTokens?: number
+  durationMs?: number
+}
+
+/** Where the Session was reset — memory gone, rather than memory summarised. */
+export type ResetMessage = {
+  kind: 'reset'
+  /** The id the fresh Transcript is mounted under. Not the Session id. */
+  transcriptId: string
+}
+
+/** Where memory surfaced from outside this conversation. */
+export type RecallMessage = {
+  kind: 'recall'
+  mode?: 'select' | 'synthesize' | string
+  memories: RecalledMemory[]
+}
+
+/**
+ * A hook firing, and what it said. Frames sharing a `hook_id` are one Message,
+ * patched from started through running to what it finished with.
+ */
+export type HookMessage = {
+  kind: 'hook'
+  id?: string
+  name: string
+  /** The lifecycle point it ran at. */
+  hookEvent?: string
+  status: 'started' | 'running' | 'success' | 'error' | 'cancelled' | string
+  output?: string
+  stdout?: string
+  stderr?: string
+  exitCode?: number
+}
 
 /**
  * How one Turn ended, at the point in the Transcript where it ended. A Session

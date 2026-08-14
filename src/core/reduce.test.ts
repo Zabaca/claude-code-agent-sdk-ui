@@ -347,3 +347,130 @@ describe('the Turn', () => {
     expect(transcript.messages[1]).toMatchObject({ outcome: 'failed', reason: 'Reached the maximum' })
   })
 })
+
+describe('markers, so the screen never quietly lies', () => {
+  test('marks where context was compacted', () => {
+    const transcript = transcriptOf([
+      assistant([{ type: 'text', text: 'Before.' }]),
+      {
+        type: 'system',
+        subtype: 'compact_boundary',
+        compact_metadata: {
+          trigger: 'auto',
+          pre_tokens: 180000,
+          post_tokens: 42000,
+          duration_ms: 3100,
+        },
+      },
+      assistant([{ type: 'text', text: 'After.' }]),
+    ])
+
+    expect(transcript.messages).toEqual([
+      { kind: 'text', text: 'Before.' },
+      {
+        kind: 'compacted',
+        trigger: 'auto',
+        preTokens: 180000,
+        postTokens: 42000,
+        durationMs: 3100,
+      },
+      { kind: 'text', text: 'After.' },
+    ])
+  })
+
+  test('marks a reset, which is memory gone rather than memory summarised', () => {
+    const transcript = transcriptOf([
+      { type: 'conversation_reset', new_conversation_id: 'conv-2' },
+    ])
+
+    expect(transcript.messages).toEqual([{ kind: 'reset', transcriptId: 'conv-2' }])
+  })
+
+  test('marks memory recalled from outside this conversation', () => {
+    const transcript = transcriptOf([
+      {
+        type: 'system',
+        subtype: 'memory_recall',
+        mode: 'select',
+        memories: [{ path: '/memories/ports.md', scope: 'personal', content: 'Prefers Bun.' }],
+      },
+    ])
+
+    expect(transcript.messages).toEqual([
+      {
+        kind: 'recall',
+        mode: 'select',
+        memories: [{ path: '/memories/ports.md', scope: 'personal', content: 'Prefers Bun.' }],
+      },
+    ])
+  })
+
+  test('records a pasted image, and one the agent put there, against its call', () => {
+    const transcript = transcriptOf([
+      person([
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBOR' } },
+        { type: 'text', text: 'what is this' },
+      ]),
+      assistant([{ type: 'tool_use', id: 'toolu_s', name: 'Screenshot', input: {} }]),
+      person([
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_s',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'PNG' } },
+          ],
+        },
+      ]),
+    ])
+
+    expect(transcript.messages.filter((message) => message.kind === 'image')).toEqual([
+      { kind: 'image', mediaType: 'image/png', data: 'iVBOR' },
+      { kind: 'image', mediaType: 'image/png', data: 'PNG', toolCallId: 'toolu_s' },
+    ])
+  })
+})
+
+describe('a hook firing', () => {
+  test('follows one hook through to what it said, rather than stacking Messages', () => {
+    const hook = { hook_id: 'hook-1', hook_name: 'format-on-edit', hook_event: 'PostToolUse' }
+    const transcript = transcriptOf([
+      { type: 'system', subtype: 'hook_started', ...hook },
+      { type: 'system', subtype: 'hook_progress', ...hook, output: 'formatting…' },
+      {
+        type: 'system',
+        subtype: 'hook_response',
+        ...hook,
+        outcome: 'error',
+        output: 'formatted 2 files',
+        stdout: 'formatted 2 files',
+        stderr: 'prettier: warning',
+        exit_code: 1,
+      },
+    ])
+
+    expect(transcript.messages).toEqual([
+      {
+        kind: 'hook',
+        id: 'hook-1',
+        name: 'format-on-edit',
+        hookEvent: 'PostToolUse',
+        status: 'error',
+        output: 'formatted 2 files',
+        stdout: 'formatted 2 files',
+        stderr: 'prettier: warning',
+        exitCode: 1,
+      },
+    ])
+  })
+
+  test('keeps two hooks apart, and keeps an unidentified one rather than folding it', () => {
+    const transcript = transcriptOf([
+      { type: 'system', subtype: 'hook_started', hook_id: 'a', hook_name: 'one' },
+      { type: 'system', subtype: 'hook_started', hook_id: 'b', hook_name: 'two' },
+      { type: 'system', subtype: 'hook_started', hook_name: 'anonymous' },
+      { type: 'system', subtype: 'hook_started', hook_name: 'anonymous' },
+    ])
+
+    expect(transcript.messages).toHaveLength(4)
+  })
+})
