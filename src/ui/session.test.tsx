@@ -19,6 +19,11 @@ test("the agent's prose reaches the screen", async () => {
 
   expect(screen.getByText('fix the flaky test')).toBeDefined()
   expect(screen.getByText('I looked at the suite.')).toBeDefined()
+  // And told apart: a person's words are Claude Code's prompt row, with the
+  // caret and the dark ground; the agent's prose is plain text. Drawn the
+  // same, a Transcript stops saying who said what.
+  expect(screen.getByText('fix the flaky test').parentElement?.textContent).toContain('❯')
+  expect(screen.getByText('I looked at the suite.').parentElement?.textContent).not.toContain('❯')
   view.unmount()
 })
 

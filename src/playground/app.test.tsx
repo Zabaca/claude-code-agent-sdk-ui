@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { expect, test } from 'bun:test'
 import { StrictMode } from 'react'
 
@@ -38,6 +38,28 @@ test('a mount React ran twice draws the log once, not twice', async () => {
   expect(entries()).toEqual(expected)
   expect(expected.length).toBeGreaterThan(4)
   strict.unmount()
+})
+
+test('typing into the playground reaches replay rather than the network', async () => {
+  const replay = replayTransport({ wait: immediately })
+  const view = render(<Playground mode="replay" transport={replay} />)
+  await drain(replay)
+
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'does this work?' } })
+  })
+  await act(async () => {
+    fireEvent.keyDown(screen.getByLabelText('Prompt'), { key: 'Enter' })
+  })
+  await drain(replay)
+
+  // Answered, and answered by the script: a playground whose composer went to
+  // the browser's own `fetch` would either 404 or, worse, reach a real agent
+  // from the mode that promises it never does.
+  expect(screen.getByText(/Replaying an answer to/)).toBeDefined()
+  expect(replay.log.some((frame) => frame.kind === 'prompt' && frame.text === 'does this work?'))
+    .toBe(true)
+  view.unmount()
 })
 
 test('the harness the runtime reported is what the header shows', async () => {

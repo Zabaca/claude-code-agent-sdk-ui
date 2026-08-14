@@ -55,6 +55,31 @@ test('the composer reaches replay: a prompt is answered, and settles once', asyn
   reloaded.unmount()
 })
 
+test('prose arrives word by word, before the block becomes a Frame', async () => {
+  const clock = paced()
+  const replay = replayTransport({ wait: clock.wait })
+  const view = await mount(replay)
+
+  // session, harness, commands, the prompt, then the block opening.
+  await clock.beat(6)
+
+  // Half a sentence is on screen and the log does not hold it yet: what is
+  // there is live text, which is the thing that makes the interface feel
+  // alive rather than arriving in blocks.
+  const said = screen.getByRole('log').textContent ?? ''
+  expect(said).toContain('Reading the')
+  expect(said).not.toContain('Reading the test first.')
+  expect(replay.log.some((frame) => frame.kind === 'text')).toBe(false)
+
+  await clock.beat(4)
+  expect(screen.getByRole('log').textContent).toContain('Reading the test first.')
+  // And exactly once: the Frame takes the live copy's place rather than
+  // landing beside it.
+  expect(screen.queryAllByText('Reading the test first.').length).toBe(1)
+  expect(replay.log.some((frame) => frame.kind === 'text')).toBe(true)
+  view.unmount()
+})
+
 test('interrupting replay cuts the script short and ends the Turn idle', async () => {
   const clock = paced()
   const replay = replayTransport({ wait: clock.wait })
