@@ -157,6 +157,7 @@ export type FailedFrame = {
   reason: string
   turns?: number
   durationMs?: number
+  stopReason?: string
   terminalReason?: string
 }
 
@@ -190,10 +191,14 @@ export type CompactedFrame = {
   durationMs?: number
 }
 
-/** The conversation was reset — memory gone, rather than memory summarised. */
+/** The Session was reset — memory gone, rather than memory summarised. */
 export type ResetFrame = {
   kind: 'reset'
-  conversationId: string
+  /**
+   * The id the fresh Transcript is mounted under, from the SDK's
+   * `new_conversation_id`. Not the Session id: the Session outlives the reset.
+   */
+  transcriptId: string
 }
 
 /** Memory surfaced from outside this conversation. */
@@ -217,13 +222,50 @@ export type ContextFrame = {
   maxTokens?: number
   percentage?: number
   overLimit?: { tokensOver?: number; kind?: string }
+  /** Usage by category — the rows of the runtime's own context report. */
   categories?: ContextCategory[]
+  /** What each MCP tool's schema costs to keep in the window. */
+  mcpTools?: ContextMcpTool[]
+  /** What each memory file costs to keep in the window. */
+  memoryFiles?: ContextMemoryFile[]
+  /** What each agent definition costs to keep in the window. */
+  agents?: ContextAgent[]
+  /** What each skill costs to keep in the window. */
+  skills?: ContextSkill[]
 }
 
 export type ContextCategory = {
   name: string
   tokens?: number
   kind?: 'used' | 'free' | 'buffer' | 'deferred' | string
+}
+
+export type ContextMcpTool = {
+  /** Wire name, e.g. `mcp__linear__create_issue`. */
+  name: string
+  serverName?: string
+  tokens?: number
+}
+
+export type ContextMemoryFile = {
+  path: string
+  /** Display label of the source, e.g. `Project` or `User`. */
+  type?: string
+  tokens?: number
+}
+
+export type ContextAgent = {
+  agentType: string
+  /** Raw source identifier, e.g. `projectSettings`, `userSettings`, `plugin`. */
+  source?: string
+  tokens?: number
+}
+
+export type ContextSkill = {
+  name: string
+  source?: string
+  pluginName?: string
+  tokens?: number
 }
 
 /** How much of the subscription is left. A different meter from the context. */
@@ -242,10 +284,11 @@ export type HookFrame = {
   kind: 'hook'
   id?: string
   name: string
-  /** The lifecycle point it ran at, e.g. `PostToolUse`. */
-  event?: string
-  status: 'started' | 'success' | 'error' | 'cancelled' | string
+  /** The lifecycle point it ran at, from the SDK's `hook_event`. */
+  hookEvent?: string
+  status: 'started' | 'running' | 'success' | 'error' | 'cancelled' | string
   output?: string
+  stdout?: string
   stderr?: string
   exitCode?: number
 }

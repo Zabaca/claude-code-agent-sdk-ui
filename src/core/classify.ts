@@ -2,8 +2,12 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 
 import type {
   CompactedFrame,
+  ContextAgent,
   ContextCategory,
   ContextFrame,
+  ContextMcpTool,
+  ContextMemoryFile,
+  ContextSkill,
   CostFrame,
   FailedFrame,
   Frame,
@@ -60,8 +64,8 @@ export function classify(message: ClassifyInput): Frame[] {
     case 'result':
       return outcome(m)
     case 'conversation_reset': {
-      const conversationId = str(m['new_conversation_id'])
-      return conversationId === undefined ? [] : [{ kind: 'reset', conversationId }]
+      const transcriptId = str(m['new_conversation_id'])
+      return transcriptId === undefined ? [] : [{ kind: 'reset', transcriptId }]
     }
     case 'rate_limit_event':
       return rateLimit(m['rate_limit_info'])
@@ -186,6 +190,7 @@ function outcome(m: Rec): Frame[] {
           reason: reasonIn(m) ?? subtype ?? 'unknown',
           turns,
           durationMs,
+          stopReason: str(m['stop_reason']),
           terminalReason,
         })
 
@@ -302,6 +307,8 @@ function system(m: Rec): Frame[] {
       return [compacted(m['compact_metadata'])]
     case 'hook_started':
       return hook(m, 'started')
+    case 'hook_progress':
+      return hook(m, 'running')
     case 'hook_response':
       return hook(m, str(m['outcome']) ?? 'success')
     case 'memory_recall':
@@ -325,9 +332,10 @@ function hook(m: Rec, status: string): Frame[] {
       kind: 'hook',
       id: str(m['hook_id']),
       name,
-      event: str(m['hook_event']),
+      hookEvent: str(m['hook_event']),
       status,
       output: str(m['output']),
+      stdout: str(m['stdout']),
       stderr: str(m['stderr']),
       exitCode: num(m['exit_code']),
     }),
@@ -397,8 +405,37 @@ function contextUsage(value: unknown): Frame[] {
             kind: str(overLimit['kind']),
           })
         : undefined,
-      categories: named(usage['categories'], (entry, name) =>
+      categories: identified(usage['categories'], 'name', (entry, name) =>
         compact<ContextCategory>({ name, tokens: num(entry['tokens']), kind: str(entry['kind']) }),
+      ),
+      mcpTools: identified(usage['mcp_tools'], 'name', (entry, name) =>
+        compact<ContextMcpTool>({
+          name,
+          serverName: str(entry['server_name']),
+          tokens: num(entry['tokens']),
+        }),
+      ),
+      memoryFiles: identified(usage['memory_files'], 'path', (entry, path) =>
+        compact<ContextMemoryFile>({
+          path,
+          type: str(entry['type']),
+          tokens: num(entry['tokens']),
+        }),
+      ),
+      agents: identified(usage['agents'], 'agent_type', (entry, agentType) =>
+        compact<ContextAgent>({
+          agentType,
+          source: str(entry['source']),
+          tokens: num(entry['tokens']),
+        }),
+      ),
+      skills: identified(usage['skills'], 'name', (entry, name) =>
+        compact<ContextSkill>({
+          name,
+          source: str(entry['source']),
+          pluginName: str(entry['plugin_name']),
+          tokens: num(entry['tokens']),
+        }),
       ),
     }),
   ]
@@ -422,10 +459,10 @@ function init(m: Rec): Frame[] {
       tools: strings(m['tools']),
       agents: strings(m['agents']),
       skills: strings(m['skills']),
-      mcpServers: named(m['mcp_servers'], (entry, name) =>
+      mcpServers: identified(m['mcp_servers'], 'name', (entry, name) =>
         compact({ name, status: str(entry['status']) }),
       ),
-      plugins: named(m['plugins'], (entry, name) =>
+      plugins: identified(m['plugins'], 'name', (entry, name) =>
         compact({ name, path: str(entry['path']), version: str(entry['version']) }),
       ),
     }),
@@ -503,12 +540,19 @@ function strings(value: unknown): string[] | undefined {
   return Array.isArray(value) ? value.filter((entry) => typeof entry === 'string') : undefined
 }
 
-/** Maps entries that carry a `name`, dropping those that do not. */
-function named<T>(value: unknown, map: (entry: Rec, name: string) => T): T[] | undefined {
+/**
+ * Maps the entries of a list that carry the field identifying them, dropping
+ * those that do not.
+ */
+function identified<T>(
+  value: unknown,
+  field: string,
+  map: (entry: Rec, id: string) => T,
+): T[] | undefined {
   if (!Array.isArray(value)) return undefined
-  return value.flatMap((entry) => {
-    const record_ = record(entry)
-    const name = record_ && str(record_['name'])
-    return record_ && name !== undefined ? [map(record_, name)] : []
+  return value.flatMap((item) => {
+    const entry = record(item)
+    const id = entry && str(entry[field])
+    return entry && id !== undefined ? [map(entry, id)] : []
   })
 }

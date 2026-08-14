@@ -379,6 +379,7 @@ describe('the Turn ending', () => {
       num_turns: 40,
       duration_ms: 90000,
       errors: ['Reached the maximum number of turns'],
+      stop_reason: 'max_turns',
       terminal_reason: 'max_turns',
       total_cost_usd: 1.5,
     })
@@ -389,6 +390,7 @@ describe('the Turn ending', () => {
       reason: 'Reached the maximum number of turns',
       turns: 40,
       durationMs: 90000,
+      stopReason: 'max_turns',
       terminalReason: 'max_turns',
     })
     expect(frames.map((frame) => frame.kind)).not.toContain('settled')
@@ -452,7 +454,7 @@ describe('what the agent can still see', () => {
       new_conversation_id: 'conv-2',
     })
 
-    expect(frames).toEqual([{ kind: 'reset', conversationId: 'conv-2' }])
+    expect(frames).toEqual([{ kind: 'reset', transcriptId: 'conv-2' }])
   })
 
   test('marks memory recalled from outside this conversation', () => {
@@ -512,6 +514,43 @@ describe('what the agent can still see', () => {
     ])
   })
 
+  test('carries the whole context breakdown, not just its categories', () => {
+    const frames = classify({
+      type: 'assistant',
+      session_id: 'sess-1',
+      parent_tool_use_id: null,
+      message: { role: 'assistant', content: [] },
+      context_usage: {
+        model: 'claude-opus-4',
+        total_tokens: 210000,
+        raw_max_tokens: 200000,
+        percentage: 105,
+        over_limit: { tokens_over: 10000, kind: 'hard_limit' },
+        categories: [{ name: 'Messages', tokens: 90000, kind: 'used' }],
+        mcp_tools: [{ name: 'mcp__linear__create_issue', server_name: 'linear', tokens: 800 }],
+        memory_files: [{ path: '/repo/CLAUDE.md', type: 'Project', tokens: 1200 }],
+        agents: [{ agent_type: 'reviewer', source: 'projectSettings', tokens: 400 }],
+        skills: [{ name: 'tdd', source: 'plugin', plugin_name: 'mattpocock-skills', tokens: 300 }],
+      },
+    })
+
+    expect(frames).toEqual([
+      {
+        kind: 'context',
+        model: 'claude-opus-4',
+        totalTokens: 210000,
+        maxTokens: 200000,
+        percentage: 105,
+        overLimit: { tokensOver: 10000, kind: 'hard_limit' },
+        categories: [{ name: 'Messages', tokens: 90000, kind: 'used' }],
+        mcpTools: [{ name: 'mcp__linear__create_issue', serverName: 'linear', tokens: 800 }],
+        memoryFiles: [{ path: '/repo/CLAUDE.md', type: 'Project', tokens: 1200 }],
+        agents: [{ agentType: 'reviewer', source: 'projectSettings', tokens: 400 }],
+        skills: [{ name: 'tdd', source: 'plugin', pluginName: 'mattpocock-skills', tokens: 300 }],
+      },
+    ])
+  })
+
   test('emits the subscription rate limit as its own meter', () => {
     const frames = classify({
       type: 'rate_limit_event',
@@ -550,7 +589,40 @@ describe('the runtime acting on its own', () => {
     })
 
     expect(frames).toEqual([
-      { kind: 'hook', id: 'hook-1', name: 'format-on-edit', event: 'PostToolUse', status: 'started' },
+      {
+        kind: 'hook',
+        id: 'hook-1',
+        name: 'format-on-edit',
+        hookEvent: 'PostToolUse',
+        status: 'started',
+      },
+    ])
+  })
+
+  test('emits what a still-running hook has said so far', () => {
+    const frames = classify({
+      type: 'system',
+      subtype: 'hook_progress',
+      session_id: 'sess-1',
+      hook_id: 'hook-1',
+      hook_name: 'format-on-edit',
+      hook_event: 'PostToolUse',
+      output: 'formatting…',
+      stdout: 'formatting…',
+      stderr: '',
+    })
+
+    expect(frames).toEqual([
+      {
+        kind: 'hook',
+        id: 'hook-1',
+        name: 'format-on-edit',
+        hookEvent: 'PostToolUse',
+        status: 'running',
+        output: 'formatting…',
+        stdout: 'formatting…',
+        stderr: '',
+      },
     ])
   })
 
@@ -564,6 +636,7 @@ describe('the runtime acting on its own', () => {
       hook_event: 'PostToolUse',
       outcome: 'error',
       output: 'formatted 2 files',
+      stdout: 'formatted 2 files',
       stderr: 'prettier: warning',
       exit_code: 1,
     })
@@ -573,9 +646,10 @@ describe('the runtime acting on its own', () => {
         kind: 'hook',
         id: 'hook-1',
         name: 'format-on-edit',
-        event: 'PostToolUse',
+        hookEvent: 'PostToolUse',
         status: 'error',
         output: 'formatted 2 files',
+        stdout: 'formatted 2 files',
         stderr: 'prettier: warning',
         exitCode: 1,
       },
