@@ -57,6 +57,27 @@ why.
 `core` has no runtime dependency on the SDK, no clock and no socket, so a
 recorded frame log replays through it in a test with no credential.
 
+## Styling
+
+`styles.css` is precompiled. You do not need Tailwind, a config file, or a
+PostCSS step — importing it is the whole setup. Every class it defines carries a
+`cc:` prefix, and it does not reset your page.
+
+The components draw with `--cc-*` custom properties, defaulted to tokyo-night.
+Redefine any of them on an ancestor to re-theme:
+
+```css
+.my-app {
+  --cc-fg: #1a1a1a;
+  --cc-accent: #7c3aed;
+  --cc-success: #15803d;
+}
+```
+
+The sources under `src/ui/` stay written in Tailwind so they remain diffable
+against upstream Brainless; `bun run build:css` is what turns them into the
+shipped stylesheet.
+
 ## Credits
 
 The components under `src/ui/` are derived from

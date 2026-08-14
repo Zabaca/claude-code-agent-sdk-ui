@@ -1,0 +1,72 @@
+/**
+ * Theme tokens for the vendored Brainless components.
+ *
+ * Upstream hardcodes tokyo-night hex at every use site. Here every colour the
+ * components draw with is a `--cc-*` custom property, defaulted to the same
+ * tokyo-night values, so redefining any of them on an ancestor element
+ * re-themes the components without touching the compiled stylesheet.
+ */
+:root {
+  /* text */
+  --cc-fg: #c0caf5;
+  --cc-fg-muted: #8b8fa3;
+  --cc-fg-dim: #565f89;
+  --cc-muted: #949494;
+
+  /* Claude's terracotta */
+  --cc-accent: #cd694a;
+  --cc-accent-bright: #e79475;
+
+  /* status */
+  --cc-success: #4ea96f;
+  --cc-error: #f7768e;
+  --cc-pending: #e0af68;
+  --cc-info: #7dcfff;
+  --cc-focus-ring: rgb(125 207 255 / 0.6);
+
+  /* a person's Message row */
+  --cc-user-bg: #3a3a3a;
+  --cc-user-caret: #4e4e4e;
+  --cc-user-fg: #ffffff;
+
+  /* the working line */
+  --cc-working-dim: #7d7d7d;
+
+  /* todo list */
+  --cc-todo-done: #87d787;
+  --cc-todo-active: #d78787;
+
+  /* diff */
+  --cc-diff-bg: #101010;
+  --cc-diff-border: #202022;
+  --cc-diff-gutter: #3b3f52;
+  --cc-diff-add-bg: rgb(78 169 111 / 0.1);
+  --cc-diff-del-bg: rgb(247 118 142 / 0.12);
+
+  /* composer */
+  --cc-rule: #808080;
+  --cc-mode-auto: #ffd700;
+  --cc-mode-manual: var(--cc-muted);
+  --cc-mode-accept-edits: #afafd7;
+  --cc-mode-plan: #5fafaf;
+  --cc-ultracode-rainbow: linear-gradient(
+    90deg,
+    #afafd7,
+    #d7afd7,
+    #ff87af,
+    #ffaf87,
+    #ffd787,
+    #afd787,
+    #afafd7
+  );
+
+  /* slash menu */
+  --cc-slash-active: #afd7ff;
+  --cc-slash-inactive: var(--cc-muted);
+}
+
+/*
+ * `--cc-font-mono` is Tailwind's own prefixed theme variable, emitted into
+ * `@layer theme` by the compiled stylesheet. It is left undeclared here so a
+ * consumer redefining it re-themes the typeface too.
+ */
