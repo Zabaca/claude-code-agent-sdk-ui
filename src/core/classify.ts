@@ -1,6 +1,14 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 
-import type { Frame, HarnessFrame, SlashCommandInfo } from './frame.ts'
+import type {
+  Frame,
+  HarnessFrame,
+  ReasoningFrame,
+  SlashCommandInfo,
+  TextFrame,
+  ThreadOpened,
+  ToolCallFrame,
+} from './frame.ts'
 
 /**
  * What `classify` accepts. `SDKMessage` is imported as a **type only** and
@@ -22,9 +30,61 @@ export function classify(message: ClassifyInput): Frame[] {
   switch (str(m['type'])) {
     case 'system':
       return system(m)
+    case 'assistant':
+      return agent(m)
     default:
       return []
   }
+}
+
+function agent(m: Rec): Frame[] {
+  const thread = str(m['parent_tool_use_id'])
+
+  return contentOf(m['message']).flatMap((block): Frame[] => {
+    switch (str(block['type'])) {
+      case 'text': {
+        const text = str(block['text'])
+        return text === undefined ? [] : [compact<TextFrame>({ kind: 'text', text, thread })]
+      }
+      case 'thinking': {
+        const text = str(block['thinking'])
+        return text === undefined
+          ? []
+          : [compact<ReasoningFrame>({ kind: 'reasoning', text, thread })]
+      }
+      case 'tool_use': {
+        const id = str(block['id'])
+        const name = str(block['name'])
+        if (id === undefined || name === undefined) return []
+        const input = record(block['input']) ?? {}
+        return [
+          compact<ToolCallFrame>({
+            kind: 'tool-call',
+            id,
+            name,
+            input,
+            thread,
+            opens: opensThread(name) ? threadOpenedBy(id, input) : undefined,
+          }),
+        ]
+      }
+      default:
+        return []
+    }
+  })
+}
+
+/** A Thread is the line of work opened by a `Task` call. */
+function opensThread(toolName: string): boolean {
+  return toolName === 'Task'
+}
+
+function threadOpenedBy(id: string, input: Rec): ThreadOpened {
+  return compact<ThreadOpened>({
+    thread: id,
+    description: str(input['description']),
+    subagentType: str(input['subagent_type']),
+  })
 }
 
 function system(m: Rec): Frame[] {
@@ -103,6 +163,16 @@ function compact<T extends object>(value: Loose<T>): T {
     if (entry !== undefined) out[key] = entry
   }
   return out as T
+}
+
+/** The content blocks of an SDK message, whatever else the wrapper carries. */
+function contentOf(message: unknown): Rec[] {
+  const envelope = record(message)
+  if (!envelope) return []
+  return list(envelope['content']).flatMap((block) => {
+    const entry = record(block)
+    return entry ? [entry] : []
+  })
 }
 
 function record(value: unknown): Rec | undefined {
