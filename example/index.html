@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>claude-code-agent-sdk-ui — playground</title>
+    <!--
+      The package's own stylesheet, precompiled and prefixed — built by
+      `example/server.ts` if it is not there yet. Importing it is all the
+      styling setup there is: no Tailwind configuration at the consumer, and no
+      reset of this page, which is why the page paints its own background.
+    -->
+    <link rel="stylesheet" href="../dist/styles.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #1a1b26;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>
