@@ -1,3 +1,6 @@
 export { classify } from './classify.ts'
 export type { ClassifyInput } from './classify.ts'
+export { reduce } from './reduce.ts'
+export type { ReduceOptions } from './reduce.ts'
 export type * from './frame.ts'
+export type * from './transcript.ts'
