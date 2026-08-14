@@ -70,10 +70,14 @@ test('sending a prompt starts a Turn, and interrupting stops it', async () => {
     fake.frame({ kind: 'settled', terminalReason: 'aborted_streaming' })
   })
 
+  // Idle, because a stop the person asked for is not a problem they have —
+  // and `interrupted`, because the Turn did not run to the end. The handler
+  // retains an interrupt as a settled Frame, so `terminalReason` is the only
+  // thing that tells the two endings apart.
   expect(session.current.transcript.turn).toEqual({ status: 'idle' })
   expect(session.current.transcript.messages.at(-1)).toEqual({
     kind: 'outcome',
-    outcome: 'settled',
+    outcome: 'interrupted',
     terminalReason: 'aborted_streaming',
   })
 })
@@ -459,7 +463,7 @@ test('live text does not outlive the Turn that was writing it', async () => {
 
   expect(session.current.transcript.messages).toEqual([
     { kind: 'prompt', text: 'write a novel' },
-    { kind: 'outcome', outcome: 'settled', terminalReason: 'aborted_streaming' },
+    { kind: 'outcome', outcome: 'interrupted', terminalReason: 'aborted_streaming' },
   ])
 })
 

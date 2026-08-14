@@ -1,4 +1,4 @@
-import type { FailedFrame, Frame } from './frame.ts'
+import type { Frame } from './frame.ts'
 import type {
   CompactedMessage,
   HookMessage,
@@ -199,7 +199,15 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
         messages.push(
           compact<OutcomeMessage>({
             kind: 'outcome',
-            outcome: 'settled',
+            // An interrupt reaches the log as a settled Frame: the handler
+            // retains it that way because a stop the person asked for is not a
+            // failure, and emitting nothing would leave the working line
+            // spinning for a Turn that had stopped. But `settled` on its own
+            // would then say the Turn ran to the end, so the runtime's own
+            // reason for stopping still decides which ending this is — the
+            // same predicate the failed branch uses, which until now was wired
+            // to only one of the two places a stop can arrive.
+            outcome: interrupted(frame) ? 'interrupted' : 'settled',
             result: frame.result,
             turns: frame.turns,
             durationMs: frame.durationMs,
@@ -262,7 +270,7 @@ type SessionState = Omit<Transcript, 'messages' | 'turn'>
  */
 const ABORTED = new Set(['aborted_streaming', 'aborted_tools'])
 
-function interrupted(frame: FailedFrame): boolean {
+function interrupted(frame: { terminalReason?: string }): boolean {
   return frame.terminalReason !== undefined && ABORTED.has(frame.terminalReason)
 }
 
