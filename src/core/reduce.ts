@@ -19,7 +19,16 @@ import type {
  *
  * Pure: no clock, no socket, no runtime SDK import. Replaying the same Frame
  * log twice produces an identical Transcript, and the log itself is never
- * mutated.
+ * mutated — which is what lets an SSE reconnect replay from a Frame index.
+ *
+ * Every Frame kind lands somewhere. Prose, the person's words, tool calls,
+ * images, compaction, reset, recall, hooks and how each Turn ended are
+ * Messages; the Session id, the harness, the slash commands and the three
+ * meters are Session-wide state, because they are the latest word on a fact
+ * rather than an entry in the Transcript. Two things are held back, both on
+ * purpose and both said again where they happen: the agent's deliberation,
+ * unless `options.reasoning` asks for it, and a tool result's own Thread, which
+ * is the Thread its call already names.
  */
 export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): Transcript {
   const messages: Message[] = []

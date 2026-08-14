@@ -10,8 +10,10 @@ import type {
 } from './frame.ts'
 
 /**
- * The Transcript is the ordered list of Messages a viewer sees, plus what is
- * true of the Session rather than of any one Message.
+ * The Transcript is the ordered list of Messages a viewer sees. It carries a
+ * few Session-wide facts alongside that list — the harness, the commands, the
+ * meters — because they are what the runtime last said rather than an entry
+ * anywhere in the order.
  *
  * It is **flat**: nesting is a rendering decision. A Message carries the Thread
  * it belongs to, and the `Task` Message names the Thread it opens; a renderer
