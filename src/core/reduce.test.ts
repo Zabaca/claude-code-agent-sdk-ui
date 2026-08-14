@@ -2,11 +2,15 @@ import { describe, expect, test } from 'bun:test'
 
 import { classify, type ClassifyInput } from './classify.ts'
 import { reduce } from './reduce.ts'
-import type { Transcript } from './transcript.ts'
+import type { Message, Transcript } from './transcript.ts'
 
 /** The seam under test: fixture SDK messages in, Transcript out. */
 function transcriptOf(stream: ClassifyInput[]): Transcript {
   return reduce(stream.flatMap((message) => classify(message)))
+}
+
+function threadOf(message: Message): string | undefined {
+  return 'thread' in message ? message.thread : undefined
 }
 
 function assistant(content: unknown[], extra: Record<string, unknown> = {}) {
@@ -156,5 +160,190 @@ describe('a tool answering the call that opened it', () => {
     ])
 
     expect(transcript.messages[0]).toMatchObject({ structured: { structuredPatch: patch } })
+  })
+})
+
+describe('a Thread', () => {
+  test('names the Thread on the Task Message, and attributes the work to it', () => {
+    const transcript = transcriptOf([
+      person('review the diff'),
+      assistant([
+        {
+          type: 'tool_use',
+          id: 'toolu_task',
+          name: 'Task',
+          input: { description: 'Review the diff', subagent_type: 'code-reviewer' },
+        },
+      ]),
+      assistant([{ type: 'text', text: 'Reading.' }], { parent_tool_use_id: 'toolu_task' }),
+      assistant([{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: '/a.ts' } }], {
+        parent_tool_use_id: 'toolu_task',
+      }),
+      person([{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'export const a = 1' }], {
+        parent_tool_use_id: 'toolu_task',
+      }),
+      person([{ type: 'tool_result', tool_use_id: 'toolu_task', content: 'Looks good.' }]),
+    ])
+
+    expect(transcript.messages[1]).toMatchObject({
+      kind: 'tool-call',
+      id: 'toolu_task',
+      opens: {
+        thread: 'toolu_task',
+        description: 'Review the diff',
+        subagentType: 'code-reviewer',
+      },
+    })
+    expect(transcript.messages.map(threadOf)).toEqual([
+      undefined,
+      undefined,
+      'toolu_task',
+      'toolu_task',
+    ])
+  })
+
+  test('keeps the Transcript flat, so nesting stays a rendering decision', () => {
+    const transcript = transcriptOf([
+      assistant([
+        { type: 'tool_use', id: 'toolu_a', name: 'Task', input: { description: 'A' } },
+        { type: 'tool_use', id: 'toolu_b', name: 'Task', input: { description: 'B' } },
+      ]),
+      assistant([{ type: 'text', text: 'From A.' }], { parent_tool_use_id: 'toolu_a' }),
+      assistant([{ type: 'text', text: 'From B.' }], { parent_tool_use_id: 'toolu_b' }),
+    ])
+
+    expect(transcript.messages.map((message) => message.kind)).toEqual([
+      'tool-call',
+      'tool-call',
+      'text',
+      'text',
+    ])
+    expect(transcript.messages.every((message) => !('messages' in message))).toBe(true)
+  })
+
+  test('does not fold two Threads prose together just because they are adjacent', () => {
+    const transcript = transcriptOf([
+      assistant([{ type: 'text', text: 'From A.' }], { parent_tool_use_id: 'toolu_a' }),
+      assistant([{ type: 'text', text: 'From B.' }], { parent_tool_use_id: 'toolu_b' }),
+    ])
+
+    expect(transcript.messages).toEqual([
+      { kind: 'text', text: 'From A.', thread: 'toolu_a' },
+      { kind: 'text', text: 'From B.', thread: 'toolu_b' },
+    ])
+  })
+})
+
+describe('the Turn', () => {
+  test('is idle before anything is asked of it', () => {
+    expect(transcriptOf([]).turn).toEqual({ status: 'idle' })
+  })
+
+  test('is working from the moment the person asks until the Turn ends', () => {
+    const working = transcriptOf([person('ship it')])
+    const ended = transcriptOf([
+      person('ship it'),
+      { type: 'result', subtype: 'success', result: 'Shipped.', num_turns: 3, duration_ms: 4200 },
+    ])
+
+    expect(working.turn.status).toBe('working')
+    expect(ended.turn.status).toBe('idle')
+  })
+
+  test('records what the Turn answered where a later Turn cannot overwrite it', () => {
+    const transcript = transcriptOf([
+      person('ship it'),
+      {
+        type: 'result',
+        subtype: 'success',
+        result: 'Shipped.',
+        num_turns: 3,
+        duration_ms: 4200,
+        stop_reason: 'end_turn',
+        terminal_reason: 'completed',
+      },
+    ])
+
+    expect(transcript.messages.at(-1)).toEqual({
+      kind: 'outcome',
+      outcome: 'settled',
+      result: 'Shipped.',
+      turns: 3,
+      durationMs: 4200,
+      stopReason: 'end_turn',
+      terminalReason: 'completed',
+    })
+  })
+
+  test('renders a Turn that stopped short as a failure carrying its reason', () => {
+    const transcript = transcriptOf([
+      person('ship it'),
+      {
+        type: 'result',
+        subtype: 'error_max_turns',
+        num_turns: 40,
+        duration_ms: 90000,
+        errors: ['Reached the maximum number of turns'],
+        stop_reason: 'max_turns',
+        terminal_reason: 'max_turns',
+      },
+    ])
+
+    expect(transcript.turn).toEqual({
+      status: 'failed',
+      subtype: 'error_max_turns',
+      reason: 'Reached the maximum number of turns',
+    })
+    expect(transcript.messages.at(-1)).toEqual({
+      kind: 'outcome',
+      outcome: 'failed',
+      subtype: 'error_max_turns',
+      reason: 'Reached the maximum number of turns',
+      turns: 40,
+      durationMs: 90000,
+      stopReason: 'max_turns',
+      terminalReason: 'max_turns',
+    })
+  })
+
+  test.each(['aborted_streaming', 'aborted_tools'])(
+    'reduces a Turn interrupted mid-%s to idle rather than to a failure',
+    (terminalReason) => {
+      const transcript = transcriptOf([
+        person('ship it'),
+        {
+          type: 'result',
+          subtype: 'error_during_execution',
+          is_error: true,
+          num_turns: 2,
+          duration_ms: 1200,
+          terminal_reason: terminalReason,
+        },
+      ])
+
+      expect(transcript.turn.status).toBe('idle')
+      expect(transcript.turn).not.toHaveProperty('reason')
+      expect(transcript.messages.at(-1)).toMatchObject({
+        kind: 'outcome',
+        outcome: 'interrupted',
+      })
+      expect(transcript.messages.map((message) => message.kind)).not.toContain('failed')
+    },
+  )
+
+  test('leaves an earlier Turn s outcome standing when the next Turn starts', () => {
+    const transcript = transcriptOf([
+      person('ship it'),
+      { type: 'result', subtype: 'error_max_turns', errors: ['Reached the maximum'] },
+      person('try again'),
+    ])
+
+    expect(transcript.turn.status).toBe('working')
+    expect(transcript.messages.map((message) => message.kind)).toEqual([
+      'prompt',
+      'outcome',
+      'prompt',
+    ])
+    expect(transcript.messages[1]).toMatchObject({ outcome: 'failed', reason: 'Reached the maximum' })
   })
 })

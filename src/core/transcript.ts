@@ -13,9 +13,30 @@ import type { PromptOrigin, ThreadOpened } from './frame.ts'
 export type Transcript = {
   /** The ordered list of Messages a viewer sees. */
   messages: Message[]
+  /** Where the Turn now running — or the one that just ended — stands. */
+  turn: Turn
 }
 
-export type Message = PromptMessage | TextMessage | ToolCallMessage
+/**
+ * The state of the latest Turn. An interrupt is idle, never a failure: aborting
+ * a Turn is what the person asked for, and reporting it as an error overwrites
+ * an idle Turn with a problem nobody had.
+ */
+export type Turn = {
+  status: TurnStatus
+  /** The runtime's result subtype, when the Turn failed. */
+  subtype?: string
+  /** Why it stopped, in the runtime's own words. Absent unless it failed. */
+  reason?: string
+}
+
+/**
+ * `working` from the person's words until the Turn ends; `idle` when it
+ * finished or was interrupted; `failed` when it stopped short.
+ */
+export type TurnStatus = 'idle' | 'working' | 'failed'
+
+export type Message = PromptMessage | TextMessage | ToolCallMessage | OutcomeMessage
 
 /** A person's words. */
 export type PromptMessage = {
@@ -59,3 +80,29 @@ export type ToolCallMessage = {
 
 /** `pending` until the tool answers; then whether it answered or failed. */
 export type ToolStatus = 'pending' | 'success' | 'error'
+
+/**
+ * How one Turn ended, at the point in the Transcript where it ended. A Session
+ * runs many Turns, so this is a Message rather than only Session state: the way
+ * the third Turn ended must not erase how the first one did.
+ */
+export type OutcomeMessage = {
+  kind: 'outcome'
+  outcome: TurnOutcome
+  /** What the Turn answered, when it settled. */
+  result?: string
+  /** The runtime's result subtype, when it failed. */
+  subtype?: string
+  /** Why it stopped, when it failed. */
+  reason?: string
+  turns?: number
+  durationMs?: number
+  stopReason?: string
+  terminalReason?: string
+}
+
+/**
+ * `interrupted` is kept apart from `failed` deliberately — a stop the person
+ * asked for is not a problem they have.
+ */
+export type TurnOutcome = 'settled' | 'interrupted' | 'failed'

@@ -1,10 +1,12 @@
-import type { Frame } from './frame.ts'
+import type { FailedFrame, Frame } from './frame.ts'
 import type {
   Message,
+  OutcomeMessage,
   PromptMessage,
   TextMessage,
   ToolCallMessage,
   Transcript,
+  Turn,
 } from './transcript.ts'
 
 /**
@@ -18,6 +20,7 @@ export function reduce(frames: readonly Frame[]): Transcript {
   const messages: Message[] = []
   /** Where each open call sits, so its answer patches it rather than appends. */
   const calls = new Map<string, number>()
+  let turn: Turn = { status: 'idle' }
 
   for (const frame of frames) {
     switch (frame.kind) {
@@ -31,6 +34,7 @@ export function reduce(frames: readonly Frame[]): Transcript {
         break
       }
       case 'prompt':
+        turn = { status: 'working' }
         messages.push(
           compact<PromptMessage>({
             kind: 'prompt',
@@ -70,12 +74,57 @@ export function reduce(frames: readonly Frame[]): Transcript {
         })
         break
       }
+      case 'settled':
+        turn = { status: 'idle' }
+        messages.push(
+          compact<OutcomeMessage>({
+            kind: 'outcome',
+            outcome: 'settled',
+            result: frame.result,
+            turns: frame.turns,
+            durationMs: frame.durationMs,
+            stopReason: frame.stopReason,
+            terminalReason: frame.terminalReason,
+          }),
+        )
+        break
+      case 'failed': {
+        const stopped = interrupted(frame)
+        turn = stopped
+          ? { status: 'idle' }
+          : compact<Turn>({ status: 'failed', subtype: frame.subtype, reason: frame.reason })
+        messages.push(
+          compact<OutcomeMessage>({
+            kind: 'outcome',
+            outcome: stopped ? 'interrupted' : 'failed',
+            subtype: frame.subtype,
+            reason: stopped ? undefined : frame.reason,
+            turns: frame.turns,
+            durationMs: frame.durationMs,
+            stopReason: frame.stopReason,
+            terminalReason: frame.terminalReason,
+          }),
+        )
+        break
+      }
       default:
         break
     }
   }
 
-  return { messages }
+  return { messages, turn }
+}
+
+/**
+ * The runtime's two terminal reasons for an abort. A Turn that ends this way
+ * was stopped because someone asked for it to stop, so it reduces to idle —
+ * rendering it as an error would report a stop the person wanted as a problem
+ * they have.
+ */
+const ABORTED = new Set(['aborted_streaming', 'aborted_tools'])
+
+function interrupted(frame: FailedFrame): boolean {
+  return frame.terminalReason !== undefined && ABORTED.has(frame.terminalReason)
 }
 
 /** Every property optional, so a Message can be built before it is complete. */
