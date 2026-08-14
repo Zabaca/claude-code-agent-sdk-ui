@@ -8,9 +8,11 @@ import type {
   FailedFrame,
   Frame,
   HarnessFrame,
+  HookFrame,
   ImageFrame,
   ModelCost,
   PromptFrame,
+  PromptOrigin,
   RateLimitFrame,
   RecallFrame,
   RecalledMemory,
@@ -107,10 +109,11 @@ function spoken(m: Rec, thread: string | undefined): Frame[] {
 function person(m: Rec): Frame[] {
   const thread = str(m['parent_tool_use_id'])
   const synthetic = m['isSynthetic'] === true ? true : undefined
+  const origin = originIn(m['origin'])
   const content = record(m['message'])?.['content']
 
   if (typeof content === 'string') {
-    return [compact<PromptFrame>({ kind: 'prompt', text: content, thread, synthetic })]
+    return [compact<PromptFrame>({ kind: 'prompt', text: content, thread, synthetic, origin })]
   }
 
   const blocks = contentOf(m['message'])
@@ -124,7 +127,7 @@ function person(m: Rec): Frame[] {
         const text = str(block['text'])
         return text === undefined
           ? []
-          : [compact<PromptFrame>({ kind: 'prompt', text, thread, synthetic })]
+          : [compact<PromptFrame>({ kind: 'prompt', text, thread, synthetic, origin })]
       }
       case 'image': {
         const image = imageIn(block, thread, undefined)
@@ -234,6 +237,19 @@ function byModel(value: unknown): Record<string, ModelCost> | undefined {
   return Object.keys(out).length > 0 ? out : undefined
 }
 
+/** Who asked, when a Turn started that the person at the keyboard did not. */
+function originIn(value: unknown): PromptOrigin | undefined {
+  const origin = record(value)
+  const kind = origin && str(origin['kind'])
+  if (!origin || kind === undefined) return undefined
+  return compact<PromptOrigin>({
+    kind,
+    from: str(origin['from']),
+    name: str(origin['name']),
+    server: str(origin['server']),
+  })
+}
+
 function imageIn(block: Rec, thread: string | undefined, toolCallId: string | undefined) {
   const source = record(block['source'])
   if (!source) return undefined
@@ -279,6 +295,10 @@ function system(m: Rec): Frame[] {
       return [{ kind: 'commands', commands: commandsOf(m['commands']) }]
     case 'compact_boundary':
       return [compacted(m['compact_metadata'])]
+    case 'hook_started':
+      return hook(m, 'started')
+    case 'hook_response':
+      return hook(m, str(m['outcome']) ?? 'success')
     case 'memory_recall':
       return [
         compact<RecallFrame>({
@@ -290,6 +310,23 @@ function system(m: Rec): Frame[] {
     default:
       return []
   }
+}
+
+function hook(m: Rec, status: string): Frame[] {
+  const name = str(m['hook_name'])
+  if (name === undefined) return []
+  return [
+    compact<HookFrame>({
+      kind: 'hook',
+      id: str(m['hook_id']),
+      name,
+      event: str(m['hook_event']),
+      status,
+      output: str(m['output']),
+      stderr: str(m['stderr']),
+      exitCode: num(m['exit_code']),
+    }),
+  ]
 }
 
 function compacted(metadata: unknown): Frame {

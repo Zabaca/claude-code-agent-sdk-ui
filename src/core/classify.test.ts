@@ -538,6 +538,65 @@ describe('what the agent can still see', () => {
   })
 })
 
+describe('the runtime acting on its own', () => {
+  test('emits a hook firing, so that it is visible rather than mysterious', () => {
+    const frames = classify({
+      type: 'system',
+      subtype: 'hook_started',
+      session_id: 'sess-1',
+      hook_id: 'hook-1',
+      hook_name: 'format-on-edit',
+      hook_event: 'PostToolUse',
+    })
+
+    expect(frames).toEqual([
+      { kind: 'hook', id: 'hook-1', name: 'format-on-edit', event: 'PostToolUse', status: 'started' },
+    ])
+  })
+
+  test('emits what a hook said when it finished', () => {
+    const frames = classify({
+      type: 'system',
+      subtype: 'hook_response',
+      session_id: 'sess-1',
+      hook_id: 'hook-1',
+      hook_name: 'format-on-edit',
+      hook_event: 'PostToolUse',
+      outcome: 'error',
+      output: 'formatted 2 files',
+      stderr: 'prettier: warning',
+      exit_code: 1,
+    })
+
+    expect(frames).toEqual([
+      {
+        kind: 'hook',
+        id: 'hook-1',
+        name: 'format-on-edit',
+        event: 'PostToolUse',
+        status: 'error',
+        output: 'formatted 2 files',
+        stderr: 'prettier: warning',
+        exitCode: 1,
+      },
+    ])
+  })
+
+  test('records who started a Turn the person did not start', () => {
+    const frames = classify(
+      person('run the nightly checks', { origin: { kind: 'peer', from: 'agent-7', name: 'Scout' } }),
+    )
+
+    expect(frames).toEqual([
+      {
+        kind: 'prompt',
+        text: 'run the nightly checks',
+        origin: { kind: 'peer', from: 'agent-7', name: 'Scout' },
+      },
+    ])
+  })
+})
+
 describe('a shape we do not control', () => {
   test('produces no Frames for a message type it has never heard of', () => {
     expect(classify({ type: 'quantum_entanglement_event', session_id: 'sess-1' })).toEqual([])

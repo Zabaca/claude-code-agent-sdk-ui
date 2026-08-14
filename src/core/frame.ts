@@ -24,6 +24,7 @@ export type Frame =
   | RecallFrame
   | ContextFrame
   | RateLimitFrame
+  | HookFrame
 
 /** The Session's id, emitted the instant `init` arrives (ADR-0002). */
 export type SessionFrame = {
@@ -60,6 +61,18 @@ export type PromptFrame = {
   thread?: string
   /** The runtime wrote this, not the person. */
   synthetic?: true
+  /** Who asked — the account of a Turn the person at the keyboard did not start. */
+  origin?: PromptOrigin
+}
+
+export type PromptOrigin = {
+  kind: string
+  /** The peer that sent it, when it came from one. */
+  from?: string
+  /** The peer's display name, as reported by the sender. */
+  name?: string
+  /** The channel's server, when it came from a channel. */
+  server?: string
 }
 
 /** A stretch of the agent's prose. */
@@ -222,6 +235,19 @@ export type RateLimitFrame = {
   resetsAt?: number
   overageStatus?: string
   usingOverage?: boolean
+}
+
+/** A hook firing, and what it said. */
+export type HookFrame = {
+  kind: 'hook'
+  id?: string
+  name: string
+  /** The lifecycle point it ran at, e.g. `PostToolUse`. */
+  event?: string
+  status: 'started' | 'success' | 'error' | 'cancelled' | string
+  output?: string
+  stderr?: string
+  exitCode?: number
 }
 
 export type SlashCommandInfo = {
