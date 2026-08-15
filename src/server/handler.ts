@@ -1,7 +1,7 @@
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
 
 import { classify, type ClassifyInput } from '../core/classify.ts'
-import type { FailedFrame, Frame, SettledFrame } from '../core/frame.ts'
+import type { FailedFrame, Frame, SettledFrame, SlashCommandInfo } from '../core/frame.ts'
 import type { PartialText } from '../core/partial.ts'
 import { pushable, type Pushable } from './pushable.ts'
 
@@ -82,6 +82,29 @@ export type AgentQueryOptions = Pick<
 export type AgentQuery = AsyncIterable<ClassifyInput> & {
   interrupt(): Promise<unknown>
   close?(): void
+  /**
+   * What the runtime advertises, described rather than merely named. `init`
+   * lists bare names; this is where the descriptions, argument hints and
+   * aliases come from.
+   *
+   * Optional, because a query that cannot describe itself is a menu with less
+   * in it and never a Turn that failed.
+   */
+  supportedCommands?(): Promise<AgentSlashCommand[]>
+}
+
+/**
+ * As much of the SDK's `SlashCommand` as this handler reads. Named for the wire
+ * rather than for the glossary, and every field treated as optional on the way
+ * in for the same reason `classify` treats an `SDKMessage` that way: a menu must
+ * never fail a Turn because the SDK grew a field or dropped one.
+ */
+export type AgentSlashCommand = {
+  /** The command's name, as the SDK gives it — without the leading slash. */
+  name: string
+  description?: string
+  argumentHint?: string
+  aliases?: string[]
 }
 
 export function createAgentHandler(options: AgentHandlerOptions = {}): AgentHandler {
@@ -101,6 +124,9 @@ class AgentSession {
   #sessionId: string | undefined
   #turnOpen = false
   #interrupting = false
+  /** A `supportedCommands()` in flight. Started at `init`, awaited nowhere near
+   * the message loop — see {@link AgentSession.describe}. */
+  #describing: Promise<void> | undefined
 
   constructor(options: AgentHandlerOptions) {
     this.#options = options
@@ -251,6 +277,13 @@ class AgentSession {
         this.#query = undefined
         this.#input = undefined
       }
+      // Awaited here — after the stream has closed — and deliberately nowhere
+      // else, so that the observation task never finishes while the runtime
+      // still owes it an answer. Cleared first, so a description outstanding
+      // when the stream closed cannot be waited on twice.
+      const describing = this.#describing
+      this.#describing = undefined
+      await describing
     }
   }
 
@@ -260,7 +293,47 @@ class AgentSession {
       this.#partial(partial)
       return
     }
+    // The runtime has just named what it loaded, so now it can be asked what it
+    // advertises. Started here and never awaited here: see `#describe`.
+    if (isInit(message)) this.#describe()
     for (const frame of classify(message)) this.#append(frame)
+  }
+
+  // --- what the runtime advertises ---------------------------------------------
+
+  /**
+   * Asks the runtime to describe its slash commands, and returns immediately.
+   *
+   * This is the one genuine concurrency hazard in the package. The reply to
+   * `supportedCommands()` arrives on the same transport the messages arrive on,
+   * so awaiting it from inside the message loop stops the loop pulling — and
+   * the thing it is waiting for is behind the messages it has stopped pulling.
+   * The handler then waits forever for something only it could have delivered.
+   * Started here, resolved on its own, awaited only once the stream has closed.
+   *
+   * `init` already advertised the bare names, so what this adds is the
+   * descriptions, argument hints and aliases — which is why a failure here is
+   * caught and dropped rather than raised. A menu with less in it is not a Turn
+   * that failed, and a Turn that died is a moment when knowing what you can type
+   * is worth more than usual.
+   */
+  #describe(): void {
+    const query = this.#query
+    const ask = query?.supportedCommands
+    if (!query || !ask) return
+
+    this.#describing = (async () => {
+      try {
+        const described = commandsIn(await ask.call(query))
+        // REPLACE semantics reach the Transcript, so an empty answer retained
+        // here would blank a menu `init` had already filled.
+        if (described.length > 0) this.#append({ kind: 'commands', commands: described })
+      } catch {
+        // Caught at the call site, which is the only place it can be caught
+        // without travelling up the observation task and being read as a query
+        // that broke — failing a Turn that ran perfectly.
+      }
+    })()
   }
 
   // --- partial on the wire, coalesced in the log ------------------------------
@@ -399,6 +472,41 @@ function partialIn(
   const type = body && str(body['type'])
   if (!body || type === undefined) return undefined
   return { type, thread: str(message['parent_tool_use_id']), body }
+}
+
+/** The runtime naming what it loaded — where a Session gets its id (ADR-0002). */
+function isInit(message: ClassifyInput): boolean {
+  return str(message['type']) === 'system' && str(message['subtype']) === 'init'
+}
+
+/**
+ * What the runtime described, read the way `classify` reads an `SDKMessage`:
+ * every field optional on the way in, and a record without a name dropped
+ * rather than retained half-built.
+ */
+function commandsIn(described: unknown): SlashCommandInfo[] {
+  if (!Array.isArray(described)) return []
+  const commands: SlashCommandInfo[] = []
+  for (const entry of described) {
+    const command = record(entry)
+    const name = command && str(command['name'])
+    if (!command || name === undefined) continue
+    commands.push(
+      compact<SlashCommandInfo>({
+        name,
+        description: str(command['description']),
+        argumentHint: str(command['argumentHint']),
+        aliases: strings(command['aliases']),
+      }),
+    )
+  }
+  return commands
+}
+
+function strings(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const kept = value.filter((entry): entry is string => typeof entry === 'string')
+  return kept.length > 0 ? kept : undefined
 }
 
 function blockKind(type: string | undefined): 'text' | 'reasoning' | undefined {

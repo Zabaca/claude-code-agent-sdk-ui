@@ -210,6 +210,138 @@ test('one handler hosts one Session across Turns, and the words reach it', async
   expect(fake.prompts.map((message) => message.message.content)).toEqual(['first', 'second'])
 })
 
+/**
+ * The concurrency hazard this ticket exists for.
+ *
+ * `supportedCommands()` is a control request whose reply comes back on the same
+ * transport the messages come back on. The fake models exactly that: its reply
+ * sits in the message stream, behind everything already queued there, and is
+ * only delivered when the reader pulls it.
+ *
+ * So the breakage is mechanical. Move the `await` inside the message loop and
+ * the loop stops pulling; the reply is never reached; the await never returns;
+ * the handler waits forever for something only it could have delivered. Neither
+ * `text`, `settled` nor `cost` below is ever retained, and this test does not
+ * fail — it hangs. Which is why it is raced against a clock: the assertion is
+ * that the whole Turn arrived, and the clock is what turns a deadlock into a
+ * failure a suite can report.
+ */
+test('describing the commands never stops messages being pulled', async () => {
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('hello'))
+
+  fake.say(init('session-abc'))
+  fake.describes([
+    {
+      name: 'usage',
+      description: 'Show the Session cost',
+      argumentHint: '[window]',
+      aliases: ['cost', 'stats'],
+    },
+  ])
+  fake.say(says('Hello there'))
+  fake.say(settled())
+
+  const events = await before(2000, read(stream, 7))
+  const kinds = events.map((event) => event.data['kind'])
+
+  // The whole Turn arrived. Under the defect none of these three exist.
+  expect(kinds).toContain('text')
+  expect(kinds).toContain('settled')
+  expect(kinds).toContain('cost')
+
+  // And the description reached the log — with the hint and the aliases, which
+  // are the whole reason for asking: `init` already gave the bare name.
+  const described = events.filter((event) => event.data['kind'] === 'commands').at(-1)
+  expect(described?.data['commands']).toEqual([
+    {
+      name: 'usage',
+      description: 'Show the Session cost',
+      argumentHint: '[window]',
+      aliases: ['cost', 'stats'],
+    },
+  ])
+  expect(fake.describeCalls).toBe(1)
+})
+
+test('a menu that could not be described does not fail the Turn', async () => {
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('hello'))
+
+  fake.say(init('session-abc'))
+  fake.describeBreaks(new Error('the runtime could not list its commands'))
+  fake.say(says('Hello there'))
+  fake.say(settled())
+
+  const events = await before(2000, read(stream, 6))
+  const kinds = events.map((event) => event.data['kind'])
+
+  // Not caught, the rejection travels up the observation task and is read as a
+  // query that broke — so a Turn that ran perfectly ends `failed`, at the
+  // moment knowing what you can type is worth more than usual.
+  expect(kinds).not.toContain('failed')
+  expect(kinds).toEqual(['session', 'harness', 'commands', 'text', 'settled', 'cost'])
+
+  // And the names `init` advertised are still there to type against.
+  expect(events[2]?.data['commands']).toEqual([{ name: 'compact' }])
+})
+
+test('a runtime that describes nothing does not erase the names init advertised', async () => {
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('hello'))
+
+  fake.say(init('session-abc'))
+  fake.describes([])
+  fake.say(settled())
+
+  const events = await before(2000, read(stream, 5))
+  const commands = events.filter((event) => event.data['kind'] === 'commands')
+
+  // REPLACE semantics: an empty answer retained as a Frame would blank a menu
+  // that `init` had already filled.
+  expect(commands).toHaveLength(1)
+  expect(commands[0]?.data['commands']).toEqual([{ name: 'compact' }])
+})
+
+test('a query that cannot describe itself at all is simply not asked', async () => {
+  // Not every stand-in for `query()` has the method. Reach for it without
+  // checking and the `TypeError` is thrown on the message loop's own stack, is
+  // read as a query that broke, and fails the first Turn of every such
+  // stand-in — which is the breakage this fails on.
+  const fake = fakeQuery()
+  const handler = createAgentHandler({
+    createQuery: (params) => {
+      const { supportedCommands, ...rest } = fake.createQuery(params)
+      expect(supportedCommands).toBeDefined()
+      return rest
+    },
+  })
+
+  const stream = await handler(open())
+  await handler(prompt('hello'))
+  fake.say(init('session-abc'))
+  fake.say(settled())
+
+  const events = await before(2000, read(stream, 5))
+  expect(events.map((event) => event.data['kind'])).toEqual([
+    'session',
+    'harness',
+    'commands',
+    'settled',
+    'cost',
+  ])
+  expect(fake.describeCalls).toBe(0)
+})
+
 test('an Event the handler does not know is refused, and so is any other method', async () => {
   const fake = fakeQuery()
   const handler = createAgentHandler({ createQuery: fake.createQuery })
@@ -263,6 +395,26 @@ function settle(): Promise<void> {
 }
 
 type SseEvent = { id: string | undefined; name: string; data: Record<string, unknown> }
+
+/**
+ * A clock a deadlock can be caught with. The defect this races does not make a
+ * test fail — it makes it hang — so the timeout is what turns "waiting forever"
+ * into something a suite can report.
+ */
+async function before<T>(ms: number, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const clock = new Promise<never>((_, raise) => {
+    timer = setTimeout(
+      () => raise(new Error(`nothing more arrived within ${ms}ms — the handler is deadlocked`)),
+      ms,
+    )
+  })
+  try {
+    return await Promise.race([work, clock])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
 
 /** Reads exactly `count` SSE events off a response, then lets go of the stream. */
 async function read(response: Response, count: number): Promise<SseEvent[]> {
