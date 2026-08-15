@@ -6,6 +6,7 @@ import { useAgentSession, type AgentSessionOptions } from '../react/session.ts'
 import { ClaudeHeader } from '../ui/claude-header.tsx'
 import { ClaudeSession } from '../ui/session.tsx'
 import { replayTransport, type ReplayTransport } from './replay.ts'
+import { SCRIPT } from './script.ts'
 
 /**
  * The playground, in the two modes the spec asks for — the same UI, the same
@@ -33,7 +34,7 @@ export function Playground({
   // One transport for the life of the mode. Replay is never constructed in
   // live mode, so the script never runs against a real Session.
   const replay = React.useMemo(
-    () => (mode === 'replay' ? (transport ?? replayTransport()) : undefined),
+    () => (mode === 'replay' ? (transport ?? replayTransport({ script: SCRIPT })) : undefined),
     [mode, transport],
   )
 

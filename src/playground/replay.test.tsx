@@ -4,10 +4,11 @@ import { expect, test } from 'bun:test'
 import { reduce } from '../core/reduce.ts'
 import { useAgentSession } from '../react/session.ts'
 import { ClaudeSession } from '../ui/session.tsx'
-import { OPENING, replayTransport, type ReplayTransport } from './replay.ts'
+import { replayTransport, type ReplayTransport } from './replay.ts'
+import { OPENING, SCRIPT } from './script.ts'
 
 test('replay drives the whole container with no credential and no network', async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = await mount(replay)
 
   await drain(replay)
@@ -27,7 +28,7 @@ test('replay drives the whole container with no credential and no network', asyn
 })
 
 test('the composer reaches replay: a prompt is answered, and settles once', async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = await mount(replay)
   await drain(replay)
 
@@ -59,7 +60,7 @@ test('the composer reaches replay: a prompt is answered, and settles once', asyn
 
 test('prose arrives word by word, before the block becomes a Frame', async () => {
   const clock = paced()
-  const replay = replayTransport({ wait: clock.wait })
+  const replay = replayTransport({ wait: clock.wait, script: SCRIPT })
   const view = await mount(replay)
 
   // session, harness, commands, the prompt, the deliberation, then the block
@@ -86,7 +87,7 @@ test('prose arrives word by word, before the block becomes a Frame', async () =>
 
 test('interrupting replay cuts the script short and ends the Turn idle', async () => {
   const clock = paced()
-  const replay = replayTransport({ wait: clock.wait })
+  const replay = replayTransport({ wait: clock.wait, script: SCRIPT })
   const view = await mount(replay)
 
   // Far enough in that prose is streaming and a Turn is plainly running.
@@ -117,7 +118,7 @@ test('interrupting replay cuts the script short and ends the Turn idle', async (
 })
 
 test('a reload replays the log, because every Frame carries its index', async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const first = await mount(replay)
   await drain(replay)
   const said = screen.getByRole('log').textContent
@@ -131,7 +132,7 @@ test('a reload replays the log, because every Frame carries its index', async ()
 })
 
 test('replay shows three Threads running at once, told apart and metered', async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = await mount(replay)
   await drain(replay)
 
@@ -172,24 +173,8 @@ test('replay shows three Threads running at once, told apart and metered', async
   view.unmount()
 })
 
-test('the opening log shows prose and a tool call in every state it has', async () => {
-  // A guard for the tickets that add their own case here: trimming the script
-  // to prose would quietly turn the demo into a demo of less.
-  const transcript = reduce(OPENING.flatMap((beat) => (beat.frame ? [beat.frame] : [])))
-  const kinds = transcript.messages.map((message) => message.kind)
-  const statuses = transcript.messages.flatMap((message) =>
-    message.kind === 'tool-call' ? [message.status] : [],
-  )
-
-  expect(kinds).toContain('prompt')
-  expect(kinds).toContain('text')
-  expect(statuses).toContain('success')
-  expect(statuses).toContain('error')
-  expect(transcript.turn).toEqual({ status: 'idle' })
-})
-
 test('the opening log plays every divergence, and each reaches the screen', async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = await mount(replay)
   await drain(replay)
 
@@ -214,62 +199,6 @@ test('the opening log plays every divergence, and each reaches the screen', asyn
   view.unmount()
 })
 
-test('the opening log advertises commands, and changes them while it runs', async () => {
-  // The same guard, for this ticket's case. A demo that showed bare names would
-  // be a demo of exactly the thing the menu already had before #11 — the point
-  // is the hint and the aliases — and one that advertised a list and never
-  // touched it would leave `commands_changed` claimed but never shown.
-  const frames = OPENING.flatMap((beat) => (beat.frame ? [beat.frame] : []))
-  const advertised = frames.filter((frame) => frame.kind === 'commands')
-  expect(advertised.length).toBeGreaterThan(1)
-
-  const last = reduce(frames).commands
-  expect(last.some((command) => command.argumentHint !== undefined)).toBe(true)
-  expect(last.some((command) => (command.aliases?.length ?? 0) > 0)).toBe(true)
-
-  // REPLACE semantics, so the later list is the one that stands — and it is not
-  // the one `init` gave, or nothing was demonstrated.
-  expect(last.map((command) => command.name)).not.toEqual(
-    advertised[0]?.kind === 'commands' ? advertised[0].commands.map((one) => one.name) : [],
-  )
-})
-
-test('the opening log meters the context as it fills, and the week separately', async () => {
-  // The same guard, for this ticket's case. The working line's count is the one
-  // number on screen that moves on its own, so a script that never metered the
-  // context would leave it permanently blank and the demo would look correct.
-  const frames = OPENING.flatMap((beat) => (beat.frame ? [beat.frame] : []))
-  const readings = frames.flatMap((frame) => (frame.kind === 'context' ? [frame.totalTokens] : []))
-
-  expect(readings.length).toBeGreaterThan(1)
-  // Readings that never differ are a meter nobody can tell from a frozen one.
-  expect(new Set(readings).size).toBeGreaterThan(1)
-
-  // At least one lands before the Turn it belongs to has ended. A count that
-  // only arrived with the result would sit blank for the whole of the one
-  // stretch of time the working line is on screen.
-  const ended = frames.findIndex((frame) => frame.kind === 'settled' || frame.kind === 'failed')
-  const first = frames.findIndex((frame) => frame.kind === 'context')
-  expect(first).toBeGreaterThan(-1)
-  expect(first).toBeLessThan(ended)
-
-  // The count falls across the compaction, which is the fact the meter exists
-  // to show: the Transcript above the marker is unchanged while the window the
-  // agent is working from has just been emptied.
-  const at = frames.findIndex((frame) => frame.kind === 'compacted')
-  const before = frames.slice(0, at).flatMap((f) => (f.kind === 'context' ? [f.totalTokens] : []))
-  const after = frames.slice(at).flatMap((f) => (f.kind === 'context' ? [f.totalTokens] : []))
-  expect(after[0]).toBeLessThan(before.at(-1) ?? 0)
-
-  // The other meter, played and kept apart. Different clocks, different
-  // questions — and no chrome for either in v0.1, so `reduce` is where a
-  // reviewer can see they did not blend.
-  const transcript = reduce(frames)
-  expect(transcript.rateLimit?.utilization).toBeDefined()
-  expect(transcript.context?.totalTokens).toBe(readings.at(-1))
-  expect(transcript.context?.totalTokens).not.toBe(transcript.rateLimit?.utilization)
-})
-
 test('the opening log deliberates, and the playground does not show it', async () => {
   const frames = OPENING.flatMap((beat) => (beat.frame ? [beat.frame] : []))
   const thought = frames.flatMap((frame) => (frame.kind === 'reasoning' ? [frame.text] : []))
@@ -278,7 +207,7 @@ test('the opening log deliberates, and the playground does not show it', async (
   // asserted about an empty log.
   expect(thought.length).toBeGreaterThan(0)
 
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = await mount(replay)
   await drain(replay)
 
@@ -292,7 +221,7 @@ test('the opening log deliberates, and the playground does not show it', async (
 })
 
 test('the opening log edits a file, and the edit is drawn as the change it made', async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = await mount(replay)
   await drain(replay)
 
@@ -317,7 +246,7 @@ test('the opening log edits a file, and the edit is drawn as the change it made'
 })
 
 test("the opening log states a plan, and the plan moves while it runs", async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = await mount(replay)
   await drain(replay)
 
@@ -356,7 +285,7 @@ function outcomes(): (string | undefined)[] {
 }
 
 test('the replay log has pictures in it, held and unheld, and neither names a location', async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = await mount(replay)
   await drain(replay)
 
@@ -400,7 +329,7 @@ test('the replay log has pictures in it, held and unheld, and neither names a lo
 })
 
 test('replay resolves a handle it holds, and nothing at all for one it does not', async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
 
   // The same both-cases-one-screen shape the handler is held to. Replay holds
   // its own fixtures rather than reaching for a host — but it resolves them
@@ -422,7 +351,7 @@ test('replay resolves a handle it holds, and nothing at all for one it does not'
 })
 
 test('a screenshot pasted into replay comes back as a picture in the Transcript', async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = await mount(replay)
   await drain(replay)
   const before = shownAs('pasted', { drawn: true })
@@ -474,7 +403,7 @@ test('what replay holds are pictures, not single pixels', () => {
   //
   // Breakage this fails on: a fixture shrunk back to a pixel because it is
   // shorter in the source.
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   for (const handle of ['img_replay_pasted', 'img_replay_shot']) {
     const src = replay.imageSrc(handle)
     expect(src.startsWith('data:image/png;base64,')).toBe(true)

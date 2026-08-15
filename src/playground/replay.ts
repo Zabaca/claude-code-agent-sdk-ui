@@ -28,16 +28,32 @@ export type Beat = {
   partial?: PartialText
 }
 
+/**
+ * What there is to play. Data, handed in — the transport reads it and never
+ * reaches for a particular one, which is what lets a test drive three beats
+ * where the playground drives the whole corpus.
+ */
+export type ReplayScript = {
+  /** Played as soon as the stream opens, so the screen is never empty. */
+  opening: Beat[]
+  /** What a prompt Event is answered with. */
+  answer: (text: string) => Beat[]
+  /**
+   * The pictures the script names handles for. Replay has no host holding
+   * bytes, so it holds its own — and the rule is the handler's: a Message names
+   * a handle, and turning one into something a browser can fetch is a lookup.
+   */
+  held?: ReadonlyMap<string, string>
+}
+
 export type ReplayOptions = {
   /**
    * How the script waits between beats. The seam a test drives it at: one that
    * does not wait makes the whole script land in microtasks, with no timers.
    */
   wait?: (ms: number) => Promise<void>
-  /** Played as soon as the stream opens, so the screen is never empty. */
-  opening?: Beat[]
-  /** What a prompt Event is answered with. */
-  answer?: (text: string) => Beat[]
+  /** What to play. */
+  script: ReplayScript
 }
 
 export type ReplayTransport = {
@@ -47,7 +63,7 @@ export type ReplayTransport = {
   fetch: AgentFetch
   /**
    * For `useAgentSession({ imageSrc })` — where a held picture comes from when
-   * there is no host holding it. See {@link HELD}.
+   * there is no host holding it. See {@link ReplayScript.held}.
    */
   imageSrc: (handle: string) => string
   /** The retained log, as the handler keeps it. Index is the `id:`. */
@@ -56,19 +72,18 @@ export type ReplayTransport = {
   quiet(): Promise<void>
 }
 
-export function replayTransport(options: ReplayOptions = {}): ReplayTransport {
+export function replayTransport(options: ReplayOptions): ReplayTransport {
   const wait = options.wait ?? sleep
-  const opening = options.opening ?? OPENING
-  const answer = options.answer ?? reply
+  const { opening, answer } = options.script
 
   const log: Frame[] = []
   const listeners = new Map<string, ((event: { data: string; lastEventId: string }) => void)[]>()
   /**
    * The script's fixtures, plus whatever is pasted while the playground is
-   * open. Seeded from {@link HELD} rather than being it, so a paste mints into
-   * this run and not into the module.
+   * open. Copied rather than held, so a paste mints into this run and not into
+   * the script's own constant.
    */
-  const held = new Map(HELD)
+  const held = new Map(options.script.held ?? [])
   let minted = 0
   let started = false
   let playing: Promise<void> = Promise.resolve()
@@ -172,45 +187,6 @@ export function replayTransport(options: ReplayOptions = {}): ReplayTransport {
   return { createEventSource, fetch, imageSrc, log, quiet: () => playing }
 }
 
-/**
- * The pictures replay is holding, under the handles its script names.
- *
- * Live mode has a host holding bytes and serving them at `?image=<handle>`;
- * replay has no host, so it holds its own. What is *not* different is the rule:
- * a Message names a handle and only a handle, and turning one into something a
- * browser can fetch is a **lookup**. A handle nobody put here gets nothing
- * back, exactly as it does from the handler — which is why this is a `Map` and
- * not a template string.
- *
- * Fixtures rather than mints, because the script is a module-level constant and
- * has to name its handles literally.
- */
-const HELD = new Map<string, string>([
-  // Two 200×112 screenshots of a window — a title bar, three dots and some
-  // lines of text — drawn in tokyo-night so they look like what the playground
-  // is drawing. The person's paste is blue, the agent's capture green, so two
-  // pictures are visibly two.
-  //
-  // Real ones, not the 1×1 pixels that were here first. A single pixel decodes
-  // and proves the lookup works, and shows nothing whatsoever about how a
-  // picture is laid out — which is exactly where the bug was: stretched by the
-  // column flex around it, a 1×1 fixture drew as an empty square the width of
-  // the Transcript, and looked like an image that had failed to load.
-  [
-    'img_replay_pasted',
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAABwCAIAAADUo6jRAAABZ0lEQVR42u3cMQqDQBBAUc+hbQi5gzfzOJ4kde4jaZNSRBSSUWTmwS+XFPKQcaPb3B69FF7jEggsgSWwNhrG9+5PRK1RCVhfCvMOXSOwwNIfsBYaVk1ErZE7ljuWwJKnQtnHksASWMoGq+3uUnhgCSyBJbBcBYGlTLBW/0vWD4EFFlhggQUWWGBJYAksgSWBJbAE1n7P11Q2gMACCyywwAJLhneBJbAksASWwJLOhlV5M6Ly5ghYYIElsMACy6QpsASWwJLAElgCy5aB1/3AAgsssMACCyzDu8ASWBJYAktgSdeA5QhagQUWWGCBBZYM7wJLYElgCSyBJfnE3muGYAkssMACCyzDuwzvElgCS2BJYMkn9rYGwBJYYIEFFliGdxneJbAElsCSwFIFWLYPBBZYYIEFFlgyvAssgSWBJbAElnQerHxH3zq0FyyBJbDAAsvwLk+FAksCS2AJLMkn9l73AwusFH0Ao3thFU7GploAAAAASUVORK5CYII=',
-  ],
-  [
-    'img_replay_shot',
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAABwCAIAAADUo6jRAAABZ0lEQVR42u3cMQqDQBBAUc+hbQi5gzfyUJ4ldQpvkz4pRUQhGUVmHvxySSEPGTe6ze3RS+E1LoHAElgCa6NxGnZ/ImqNSsD6Uph36BqBBZb+gLXQsGoiao3csdyxBJY8Fco+lgSWwFI2WG13l8IDS2AJLIHlKggsZYK1+l+yfggssMACCyywwAJLAktgCSwJLIElsPZ7vt5lAwgssMACCyywZHgXWAJLAktgCSzpbFiVNyMqb46ABRZYAgsssEyaAktgCSwJLIElsGwZeN0PLLDAAgsssMAyvAssgSWBJbAElnQNWI6gFVhggQUWWGDJ8C6wBJYElsASWJJP7L1mCJbAAgsssMAyvMvwLoElsASWBJZ8Ym9rACyBBRZYYIFleJfhXQJLYAksCSxVgGX7QGCBBRZYYIElw7vAElgSWAJLYEnnwcp39K1De8ESWAILLLAM7/JUKLAksASWwJJ8Yu91P7DAStEHJv8i68ZkWKwAAAAASUVORK5CYII=',
-  ],
-])
-
-/**
- * Replay's half of `imageSrc`. A lookup, and an empty string for anything it is
- * not holding — the same "nothing" the handler answers with, so the both-cases
- * property holds on this path too and a `../` gets no further here than there.
- */
 function parse(body: string): { type?: string; text?: unknown; images?: unknown } | undefined {
   try {
     return JSON.parse(body) as { type?: string; text?: unknown; images?: unknown }
@@ -237,588 +213,4 @@ function imagesIn(value: unknown): { mediaType: string; data: string }[] {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-// --- the script ------------------------------------------------------------------
-
-/**
- * A block of prose arriving word by word, then the Frame the handler retains
- * once the block closes — the same two-step live mode makes, so what replay
- * shows of streaming is what live does.
- */
-export function prose(text: string, options: { block?: number; thread?: string } = {}): Beat[] {
-  const block = options.block ?? 0
-  const thread = options.thread
-  const words = text.split(' ')
-  const beats: Beat[] = []
-  let written = ''
-  for (const word of words) {
-    written = written === '' ? word : `${written} ${word}`
-    beats.push({
-      after: 34,
-      partial: compact<PartialText>({ block, kind: 'text', text: written, thread }),
-    })
-  }
-  beats.push({ partial: compact<PartialText>({ block, kind: 'text', text, done: true, thread }) })
-  beats.push({ frame: compact<Frame>({ kind: 'text', text, thread }) })
-  return beats
-}
-
-/** A tool call, the pause while it runs, and what it answered. */
-export function tool(call: {
-  id: string
-  name: string
-  input: Record<string, unknown>
-  output: string
-  /**
-   * The tool's full Output object, where the SDK puts it. This is what a diff
-   * is drawn from, so a scripted `Edit` that omits it demos the collapsed line
-   * rather than the change — which is exactly what a replay log is for
-   * catching.
-   */
-  structured?: unknown
-  failed?: boolean
-  takes?: number
-  /** The Thread that ran it; absent for the agent's own work. */
-  thread?: string
-}): Beat[] {
-  return [
-    {
-      after: 260,
-      frame: compact<Frame>({
-        kind: 'tool-call',
-        id: call.id,
-        name: call.name,
-        input: call.input,
-        thread: call.thread,
-      }),
-    },
-    {
-      after: call.takes ?? 700,
-      frame: compact<Frame>({
-        kind: 'tool-result',
-        id: call.id,
-        output: call.output,
-        isError: call.failed === true,
-        structured: call.structured,
-        thread: call.thread,
-      }),
-    },
-  ]
-}
-
-/**
- * The agent's plan, as `TodoWrite` states it. Written out as the SDK's own
- * shape rather than as the component's props, because the point of scripting
- * it here is that the mapping runs — a log holding `ClaudeTodoList` props
- * would demo the component and prove nothing about the wire.
- */
-export function todos(
-  id: string,
-  plan: { content: string; status: 'pending' | 'in_progress' | 'completed' }[],
-): Beat[] {
-  const listed = plan.map((item) => ({ ...item, activeForm: item.content }))
-  return tool({
-    id,
-    name: 'TodoWrite',
-    input: { todos: listed },
-    output: 'Todos have been modified successfully',
-    structured: { oldTodos: [], newTodos: listed },
-    takes: 200,
-  })
-}
-
-/**
- * What the agent's edit did to the test, as `FileEditOutput` carries it: two
- * hunks, so the playground shows the gap between them, and `originalFile`
- * present, so it reads as an update rather than a creation.
- */
-const PINNED = {
-  filePath: '/repo/src/core/reduce.test.ts',
-  originalFile: [
-    "import { test, expect } from 'bun:test'", // 1
-    '', // 2
-    "import { reduce } from './reduce.ts'", // 3
-    '', // 4
-    "test('reduce appends in order', () => {", // 5
-    '  expect(reduce([]).messages).toEqual([])', // 6
-    '})', // 7
-    '', // 8
-    "test('reduce keeps order', () => {", // 9
-    "  const frames = JSON.parse(execSync('bun run record').toString())", // 10
-    '  const transcript = reduce(frames)', // 11
-    '  expect(transcript.messages.length).toBe(3)', // 12
-    '})', // 13
-  ].join('\n'),
-  structuredPatch: [
-    {
-      oldStart: 1,
-      oldLines: 2,
-      newStart: 1,
-      newLines: 3,
-      lines: [
-        " import { test, expect } from 'bun:test'",
-        "+import fixture from './fixtures/frames.json' with { type: 'json' }",
-        ' ',
-      ],
-    },
-    // Six lines below the first hunk, which is what puts a real gap between
-    // them rather than a mark standing over nothing.
-    {
-      oldStart: 9,
-      oldLines: 5,
-      newStart: 10,
-      newLines: 4,
-      lines: [
-        " test('reduce keeps order', () => {",
-        "-  const frames = JSON.parse(execSync('bun run record').toString())",
-        '-  const transcript = reduce(frames)',
-        '+  const transcript = reduce(fixture)',
-        '   expect(transcript.messages.length).toBe(3)',
-        ' })',
-      ],
-    },
-  ],
-}
-
-/** The fixture the edit above now imports — a file that was not there before. */
-const WRITTEN = {
-  type: 'create',
-  filePath: '/repo/src/core/fixtures/frames.json',
-  originalFile: null,
-  structuredPatch: [
-    {
-      oldStart: 1,
-      oldLines: 0,
-      newStart: 1,
-      newLines: 3,
-      lines: ['+[', '+  { "kind": "prompt", "text": "hello" }', '+]'],
-    },
-  ],
-}
-
-/**
- * What the runtime advertises at `init`, described rather than merely named —
- * which is what `supportedCommands()` adds and what the menu is for. `/usage`
- * carries both an argument hint and aliases, because those are the two things a
- * bare name cannot say and the two a reviewer should be able to see.
- */
-const COMMANDS: SlashCommandInfo[] = [
-  { name: 'commit', description: 'Commit the working tree', argumentHint: '[message]' },
-  { name: 'effort', description: 'Change how hard the model thinks', argumentHint: '<level>' },
-  {
-    name: 'usage',
-    description: 'Show what this Session has spent',
-    argumentHint: '[window]',
-    aliases: ['cost', 'stats'],
-  },
-]
-
-/**
- * The `Task` call that opens a Thread. Kept apart from `tool` because a Thread
- * is only interesting while it is open: the three run at once, so their calls
- * all stand pending while their work arrives, and each is answered by
- * `threadEnded` in its own time rather than paired with its own call.
- */
-export function opensThread(open: {
-  thread: string
-  description: string
-  subagentType: string
-}): Beat {
-  return {
-    after: 200,
-    frame: {
-      kind: 'tool-call',
-      id: open.thread,
-      name: 'Task',
-      input: {
-        description: open.description,
-        subagent_type: open.subagentType,
-        prompt: `${open.description}, and report what you find`,
-      },
-      opens: {
-        thread: open.thread,
-        description: open.description,
-        subagentType: open.subagentType,
-      },
-    },
-  }
-}
-
-/** A Thread reporting back, which is what stops its meter. */
-export function threadEnded(thread: string, report: string, failed = false): Beat {
-  return {
-    after: 600,
-    frame: { kind: 'tool-result', id: thread, output: report, isError: failed },
-  }
-}
-
-/**
- * The Thread case: three Threads open at once, their work arriving
- * interleaved, and each finishing in its own time.
- *
- * One Thread would demonstrate nothing. The whole trap is that three
- * background agents' tool calls land in the Transcript indistinguishable from
- * the main agent's — so the case has to be three of them, running over each
- * other, with the main agent still doing work of its own in the middle of it.
- * The third fails, because a Thread that came back empty-handed reading like
- * one that succeeded is the same lie in a smaller place.
- */
-const THREE_THREADS: Beat[] = [
-  { after: 900, frame: { kind: 'prompt', text: 'audit the three packages in parallel' } },
-  ...prose('Opening a Thread per package.', { block: 7 }),
-  opensThread({ thread: 'toolu_task_core', description: 'audit core', subagentType: 'Explore' }),
-  opensThread({ thread: 'toolu_task_ui', description: 'audit ui', subagentType: 'Explore' }),
-  opensThread({
-    thread: 'toolu_task_server',
-    description: 'audit server',
-    subagentType: 'general-purpose',
-  }),
-  // A Thread saying what it is doing, which only arrives at all because the
-  // handler asks for it (#19). Block 0 — the same index the main agent's own
-  // prose uses, because the index counts blocks within a message and each
-  // agent is writing its own. Two blocks share an index here and stay apart,
-  // which is the thing that made forwarding safe to turn on.
-  ...prose('Checking whether reduce touches a clock.', { block: 0, thread: 'toolu_task_core' }),
-  // Interleaved on purpose: read down the Transcript and these four calls
-  // arrive in an order no single agent could have produced.
-  ...tool({
-    id: 'toolu_core_read',
-    name: 'Read',
-    input: { file_path: '/repo/src/core/reduce.ts' },
-    output: 'export function reduce(frames, options = {}) {',
-    thread: 'toolu_task_core',
-    takes: 500,
-  }),
-  ...tool({
-    id: 'toolu_ui_grep',
-    name: 'Grep',
-    input: { pattern: '#[0-9a-f]{6}' },
-    output: 'no matches',
-    thread: 'toolu_task_ui',
-    takes: 400,
-  }),
-  ...tool({
-    id: 'toolu_server_bash',
-    name: 'Bash',
-    input: { command: 'bun test src/server' },
-    output: '31 pass\n0 fail',
-    thread: 'toolu_task_server',
-    takes: 700,
-  }),
-  ...tool({
-    id: 'toolu_core_grep',
-    name: 'Grep',
-    input: { pattern: 'Date.now' },
-    output: 'no matches — core has no clock',
-    thread: 'toolu_task_core',
-    takes: 450,
-  }),
-  // Two windows reported in the same breath, and the whole of #17 on screen:
-  // the Thread's 7.4k is drawn on the Thread's meter and the main agent's 186k
-  // is not, where before either would have overwritten the other.
-  { after: 200, frame: { kind: 'context', thread: 'toolu_task_core', totalTokens: 7400 } },
-  { frame: { kind: 'context', totalTokens: 186000, maxTokens: 200000, percentage: 93 } },
-  // The main agent is still working while they run, which is what makes
-  // attribution worth anything: this line is nobody's Thread.
-  ...prose('Two are back; the third is still reading.', { block: 8 }),
-  threadEnded('toolu_task_ui', 'ui: no hardcoded hex left.'),
-  threadEnded('toolu_task_core', 'core: pure, no clock, no socket.'),
-  ...tool({
-    id: 'toolu_server_read',
-    name: 'Read',
-    input: { file_path: '/repo/src/server/handler.ts' },
-    output: 'Error: file was moved',
-    failed: true,
-    thread: 'toolu_task_server',
-    takes: 600,
-  }),
-  threadEnded('toolu_task_server', 'server: could not finish — the handler moved.', true),
-  ...prose('Two clean, one came back empty-handed.', { block: 9 }),
-  { frame: { kind: 'settled', result: 'Two packages audited; the third could not finish.' } },
-]
-
-/**
- * The opening script. Scoped to what is drawn end to end — a replay log that
- * showed a surface nothing draws yet would be a demo of an absence — and each
- * ticket adds its own case as it earns one.
- *
- * The first Turn is prose and tool calls in all three of a tool's states. What
- * follows it is the divergences: the points where the Transcript reads exactly
- * the same before and after while what the agent can actually see has changed.
- * They are the hardest thing here to believe without seeing, because the
- * failure they exist to stop looks like nothing at all — so the playground
- * plays them rather than describing them. Last comes the Thread case, for the
- * failure that looks like nothing at all in the other direction: three
- * background agents' work landing in the Transcript as though the main agent
- * had done all of it.
- */
-export const OPENING: Beat[] = [
-  { frame: { kind: 'session', sessionId: 'replay-0001' } },
-  {
-    frame: {
-      kind: 'harness',
-      model: 'claude-opus-4',
-      cwd: '/repo',
-      permissionMode: 'bypassPermissions',
-      version: '2.1.206',
-      tools: ['Read', 'Edit', 'Bash'],
-    },
-  },
-  {
-    frame: {
-      kind: 'commands',
-      commands: COMMANDS,
-    },
-  },
-  { after: 260, frame: { kind: 'prompt', text: 'the suite is flaky — find out why' } },
-  // Deliberation, played and — by default — not drawn. The Frame is on the wire
-  // either way; what the flag decides is whether a viewer reads it. Played here
-  // so the default is demonstrated against something rather than merely being
-  // true of a log that never had any.
-  { frame: { kind: 'reasoning', text: 'Flaky usually means a clock or a shared fixture.' } },
-  ...prose('Reading the test first.'),
-  // How full the window is, as the SDK reports it: attached to assistant
-  // messages, so it arrives while the Turn is running rather than with the
-  // result. This is what the working line counts.
-  { frame: { kind: 'context', totalTokens: 24_800, maxTokens: 200_000, percentage: 12.4 } },
-  // The plan, stated before the work it describes. It is restated further down
-  // with two of its three items moved on, because a task *changing* state is
-  // the only thing a todo list is for and the one thing a single list cannot
-  // show.
-  //
-  // It sits after the first block of prose rather than before it so the beat
-  // counts the paced tests above are written against still hold.
-  ...todos('toolu_todo_1', [
-    { content: 'Read the failing test', status: 'in_progress' },
-    { content: 'Reproduce the failure', status: 'pending' },
-    { content: 'Pin the fixture', status: 'pending' },
-  ]),
-  ...tool({
-    id: 'toolu_read',
-    name: 'Read',
-    input: { file_path: '/repo/src/core/reduce.test.ts' },
-    output: "import { test } from 'bun:test'\n\ntest('reduce keeps order', () => {\n  …\n})",
-    takes: 520,
-  }),
-  ...prose('It shells out for the fixture, so it depends on the clock. Running it.', {
-    block: 1,
-  }),
-  ...tool({
-    id: 'toolu_bash_1',
-    name: 'Bash',
-    input: { command: 'bun test src/core/reduce.test.ts' },
-    output: '1 fail\nreduce keeps order — expected 3, got 2',
-    failed: true,
-    takes: 900,
-  }),
-  // The agent has worked its way into a subdirectory and the runtime has found
-  // a skill there, so it pushes the whole list again — REPLACE semantics, which
-  // is why everything that survives has to be restated. Scripted here rather
-  // than only in a test, because "the menu updates mid-Session" is a claim a
-  // reviewer should be able to watch happen.
-  {
-    frame: {
-      kind: 'commands',
-      commands: [
-        ...COMMANDS,
-        { name: 'flake', description: 'Re-run a test until it fails', argumentHint: '<test>' },
-      ],
-    },
-  },
-  // A second reading, mid-Turn: the count on the working line moves while the
-  // agent works. One reading would leave a meter nobody can tell from a frozen
-  // one.
-  { frame: { kind: 'context', totalTokens: 61_200, maxTokens: 200_000, percentage: 30.6 } },
-  ...prose('There it is. The fixture is regenerated per run; pinning it.', { block: 2 }),
-  ...todos('toolu_todo_2', [
-    { content: 'Read the failing test', status: 'completed' },
-    { content: 'Reproduce the failure', status: 'completed' },
-    { content: 'Pin the fixture', status: 'in_progress' },
-  ]),
-  // A file that was not there before, so `originalFile: null` is on screen as
-  // a creation rather than as an edit to something that never existed.
-  ...tool({
-    id: 'toolu_write',
-    name: 'Write',
-    input: { file_path: '/repo/src/core/fixtures/frames.json' },
-    output: 'File created successfully at /repo/src/core/fixtures/frames.json',
-    structured: WRITTEN,
-    takes: 300,
-  }),
-  ...tool({
-    id: 'toolu_edit',
-    name: 'Edit',
-    input: { file_path: '/repo/src/core/reduce.test.ts' },
-    output: 'Applied 1 edit to /repo/src/core/reduce.test.ts',
-    structured: PINNED,
-    takes: 420,
-  }),
-  ...tool({
-    id: 'toolu_bash_2',
-    name: 'Bash',
-    input: { command: 'bun test src/core/reduce.test.ts' },
-    output: '3 pass\n0 fail',
-    takes: 800,
-  }),
-  ...prose('Pinned, and the suite is green.', { block: 3 }),
-  { frame: { kind: 'settled', result: 'Pinned the fixture; the suite is green.', turns: 1 } },
-  { frame: { kind: 'cost', usd: 0.0412, turns: 1, durationMs: 8400 } },
-  // The other meter, and the reason the two are never blended: this one is
-  // about the week, not about the conversation, and it moves on a clock the
-  // Session has no say in. No chrome for it in v0.1 — it is data the hook
-  // hands out, and the harness panel is what will draw it.
-  {
-    frame: {
-      kind: 'rate-limit',
-      status: 'allowed_warning',
-      limitType: 'weekly',
-      utilization: 0.62,
-      resetsAt: 1_760_000_000,
-    },
-  },
-
-  // --- the divergences ---------------------------------------------------------
-
-  { after: 900, frame: { kind: 'prompt', text: 'now do the same across the whole suite' } },
-  {
-    after: 300,
-    frame: {
-      kind: 'recall',
-      mode: 'select',
-      memories: [
-        { path: '/memories/testing.md', scope: 'team', content: 'Pin fixtures; never sleep.' },
-      ],
-    },
-  },
-  // A second recall that surfaced nothing. It draws nothing, and that is the
-  // point of playing it: the silence a viewer sees here is the honest one, and
-  // it is only distinguishable from a missing marker because the recall above
-  // did draw.
-  { frame: { kind: 'recall', mode: 'select', memories: [] } },
-  {
-    after: 240,
-    frame: {
-      kind: 'hook',
-      id: 'hook-guard',
-      name: 'block-secrets',
-      hookEvent: 'PreToolUse',
-      status: 'error',
-      stderr: 'refused: .env is not readable',
-      exitCode: 2,
-    },
-  },
-  ...prose('Blocked on that one. Widening the search instead.', { block: 4 }),
-  // Nearly full, which is what is about to force the compaction below.
-  { frame: { kind: 'context', totalTokens: 180_000, maxTokens: 200_000, percentage: 90 } },
-  {
-    after: 400,
-    frame: {
-      kind: 'compacted',
-      trigger: 'auto',
-      preTokens: 180000,
-      postTokens: 42000,
-      durationMs: 3100,
-    },
-  },
-  // And the count falls. This is the meter earning its place: every Message
-  // above the marker is exactly where it was, while the window the agent is
-  // actually working from has just been emptied — the working line's number
-  // dropping is the only thing on screen that moves with it.
-  { frame: { kind: 'context', totalTokens: 42_000, maxTokens: 200_000, percentage: 21 } },
-  ...prose('Working from the summary now.', { block: 5 }),
-  {
-    after: 300,
-    frame: {
-      kind: 'failed',
-      subtype: 'error_max_turns',
-      reason: 'Reached the maximum number of turns',
-      turns: 40,
-      durationMs: 90000,
-      stopReason: 'max_turns',
-      terminalReason: 'max_turns',
-    },
-  },
-  // --- pictures, both ways ------------------------------------------------------
-
-  // A screenshot pasted in, ahead of the words about it — which is the order
-  // it was sent in and the order the model read it in.
-  {
-    after: 700,
-    frame: { kind: 'image', mediaType: 'image/png', handle: 'img_replay_pasted' },
-  },
-  { frame: { kind: 'prompt', text: 'this button is clipped — see the screenshot' } },
-  ...prose('I can see it. Let me capture the same view after the fix.', { block: 7 }),
-  ...tool({
-    id: 'toolu_shot',
-    name: 'Screenshot',
-    input: { url: 'http://localhost:5173/' },
-    output: 'Captured 1 image.',
-    takes: 600,
-  }),
-  // And one the agent put there itself, attributed to the call that produced
-  // it. The Transcript shows the screenshot rather than a sentence about one,
-  // which is the whole of the second half of this feature.
-  {
-    frame: {
-      kind: 'image',
-      mediaType: 'image/png',
-      handle: 'img_replay_shot',
-      toolCallId: 'toolu_shot',
-    },
-  },
-  // A picture the host could not hold — the SDK gave a location for this one
-  // and nothing else, so there are no bytes to mint against and no location to
-  // pass on. Played because the marker without a picture is a real state, and
-  // because it is the only thing that makes the two above legible as *held*.
-  { frame: { kind: 'image', mediaType: 'image/png' } },
-  ...prose('Same clipping. It is the fixed width, not the font.', { block: 8 }),
-  { frame: { kind: 'settled', result: 'Found it: the fixed width.', turns: 1 } },
-
-  // Memory gone rather than summarised — the harder loss, and the one that
-  // must not read like the compaction two lines above it.
-  { after: 700, frame: { kind: 'reset', transcriptId: 'conv-2' } },
-  { after: 400, frame: { kind: 'prompt', text: 'start again from the failing test' } },
-  ...prose('Fresh context. Reading the failing test.', { block: 6 }),
-  { frame: { kind: 'settled', result: 'Read it.', turns: 1 } },
-
-  // --- the Threads -------------------------------------------------------------
-
-  ...THREE_THREADS,
-]
-
-/**
- * What a prompt typed into the replaying playground is answered with. It quotes
- * the words back, because the point being demonstrated is that the composer
- * reaches the runtime — not that the runtime is clever.
- */
-export function reply(text: string): Beat[] {
-  return [
-    ...prose(`Replaying an answer to “${text}”. Nothing here talks to a model.`),
-    ...tool({
-      id: `toolu_replay_${counter()}`,
-      name: 'Read',
-      input: { file_path: '/repo/README.md' },
-      output: '# claude-code-agent-sdk-ui\n\nThe layer between the SDK and a rendered UI.',
-      takes: 600,
-    }),
-    ...prose('That is the whole of replay: a Frame log, played.', { block: 1 }),
-    { frame: { kind: 'settled', result: 'Replayed.', turns: 1 } },
-  ]
-}
-
-let replies = 0
-/** Keeps two answers' tool calls from sharing a `tool_use` id. */
-function counter(): number {
-  replies += 1
-  return replies
-}
-
-/** Drops keys whose value is missing, which `exactOptionalPropertyTypes` wants. */
-function compact<T extends object>(value: { [K in keyof T]: T[K] | undefined }): T {
-  const out: Record<string, unknown> = {}
-  for (const [key, entry] of Object.entries(value)) {
-    if (entry !== undefined) out[key] = entry
-  }
-  return out as T
 }

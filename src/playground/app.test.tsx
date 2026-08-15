@@ -5,9 +5,10 @@ import { StrictMode } from 'react'
 import type { AgentEventSourceFactory } from '../react/session.ts'
 import { Playground } from './app.tsx'
 import { replayTransport, type ReplayTransport } from './replay.ts'
+import { SCRIPT } from './script.ts'
 
 test('the playground in replay mode needs no credential and no network', async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = render(<Playground mode="replay" transport={replay} />)
   await drain(replay)
 
@@ -20,13 +21,13 @@ test('a mount React ran twice draws the log once, not twice', async () => {
   // The hook places a Frame at the index its `id:` names rather than pushing
   // it, and StrictMode is the cheapest way to hold it to that: the effect
   // runs, tears down and runs again, so the log is delivered a second time.
-  const plain = replayTransport({ wait: immediately })
+  const plain = replayTransport({ wait: immediately, script: SCRIPT })
   const once = render(<Playground mode="replay" transport={plain} />)
   await drain(plain)
   const expected = entries()
   once.unmount()
 
-  const twice = replayTransport({ wait: immediately })
+  const twice = replayTransport({ wait: immediately, script: SCRIPT })
   const strict = render(
     <StrictMode>
       <Playground mode="replay" transport={twice} />
@@ -41,7 +42,7 @@ test('a mount React ran twice draws the log once, not twice', async () => {
 })
 
 test('typing into the playground reaches replay rather than the network', async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = render(<Playground mode="replay" transport={replay} />)
   await drain(replay)
 
@@ -63,7 +64,7 @@ test('typing into the playground reaches replay rather than the network', async 
 })
 
 test('the harness the runtime reported is what the header shows', async () => {
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = render(<Playground mode="replay" transport={replay} />)
 
   // Before the runtime has said anything, the header says so rather than
@@ -85,7 +86,7 @@ test('live mode opens the handler rather than the replay script', async () => {
   }
   // Replay's transport is handed in and must go unused: a live Session driven
   // by a scripted log would be the playground lying about what it is.
-  const replay = replayTransport({ wait: immediately })
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
   const view = render(
     <Host createEventSource={createEventSource}>
       <Playground mode="live" endpoint="/agent" transport={replay} />
