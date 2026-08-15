@@ -8,8 +8,25 @@ about the other. This package is the layer in between — the classifier, the
 transcript reducer, the transport, and the components with real state behind
 them.
 
-> **Status: early.** The design is settled and written down in
-> [`DESIGN.md`](./DESIGN.md); the implementation is in progress.
+> **Status: v0.1.** Everything on this page runs. Permission prompts do not
+> exist yet and are v0.2 — see below and [ADR-0003](./docs/adr/0003-bypass-permissions-by-default.md).
+> The architecture is written down in [`DESIGN.md`](./DESIGN.md).
+
+## Install
+
+```sh
+bun add @zabaca/claude-code-agent-sdk-ui @anthropic-ai/claude-agent-sdk react react-dom
+```
+
+The Agent SDK is a peer dependency — it is your credential and your bill, so it
+is yours to install and pin. `react` and `react-dom` are peers too, and are only
+needed for the `react` and `ui` entry points; a host that uses `core` and
+`server` alone can leave them out.
+
+The package ships compiled JavaScript with type declarations, so there is
+nothing to build and no TypeScript compiler option to adopt. It runs on Bun and
+on Node, and bundles under Vite, esbuild, webpack, or anything that reads an
+`exports` map.
 
 ## What you get
 
@@ -68,15 +85,21 @@ proves something about live.
 
 ## Entry points
 
-| Import                  | What it is                                                              |
-| ----------------------- | ----------------------------------------------------------------------- |
-| `.../core`              | `classify(SDKMessage) → Frame[]` and `reduce(Frame[]) → Transcript`. Pure. |
-| `.../server`            | The `query()` host — SSE transport, `canUseTool` bridge, interrupt.     |
-| `.../react`             | `useAgentSession()` and friends.                                        |
-| `.../ui`                | Vendored, wired Brainless components.                                   |
+Four, plus the stylesheet. Each is importable on its own.
 
-`core` has no runtime dependency on the SDK, no clock and no socket, so a
-recorded frame log replays through it in a test with no credential.
+| Import                                       | What it is                                                                |
+| -------------------------------------------- | ------------------------------------------------------------------------- |
+| `@zabaca/claude-code-agent-sdk-ui/core`       | `classify(SDKMessage) → Frame[]` and `reduce(Frame[]) → Transcript`. Pure. |
+| `@zabaca/claude-code-agent-sdk-ui/server`     | The `query()` host — SSE transport, interrupt, held images.               |
+| `@zabaca/claude-code-agent-sdk-ui/react`      | `useAgentSession()` and its transport types.                              |
+| `@zabaca/claude-code-agent-sdk-ui/ui`         | Vendored, wired Brainless components, and `ClaudeSession`.                |
+| `@zabaca/claude-code-agent-sdk-ui/styles.css` | The precompiled stylesheet.                                               |
+
+`core` imports no SDK code at run time — the SDK appears in it as types only,
+which compile away — so it has no clock, no socket, and nothing to authenticate.
+A recorded Frame log replays through it in a test with no credential. `server`
+loads the SDK lazily, inside the first Turn, so constructing a handler costs
+nothing either.
 
 ## Styling
 
@@ -98,6 +121,29 @@ Redefine any of them on an ancestor to re-theme:
 The sources under `src/ui/` stay written in Tailwind so they remain diffable
 against upstream Brainless; `bun run build:css` is what turns them into the
 shipped stylesheet.
+
+## Tests
+
+```sh
+bun test src         # the whole suite. No credential, no network, no tokens.
+bun run typecheck
+```
+
+Nothing in that suite needs an API key, including the test that packs the
+tarball and imports it back from a temp directory.
+
+**The live canary is the one exception, and it does not run unless you say so.**
+
+```sh
+LIVE_CANARY=1 bun run canary
+```
+
+It boots a real handler against the real Agent SDK, sends "say hi", and asserts
+a `settled` Frame comes back — the one test that would notice the SDK
+integration breaking under a version bump. It spends money, so it is off by
+default: without `LIVE_CANARY=1` it is skipped, and `bun test` alone can never
+trigger it. Credentials come from wherever the Agent SDK looks for them
+(`ANTHROPIC_API_KEY`, or the Claude Code CLI's stored credential).
 
 ## Credits
 
