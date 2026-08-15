@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { expect, test } from 'bun:test'
 
 import type { ClassifyInput } from './core/classify.ts'
+import { decodeEvents } from './core/wire.ts'
 import { useAgentSession, type AgentEventSource, type AgentFetch } from './react/session.ts'
 import { fakeQuery } from './server/fake.ts'
 import { createAgentHandler, type AgentHandler } from './server/handler.ts'
@@ -496,19 +497,13 @@ function through(handler: AgentHandler): {
           const { done, value } = await reader.read()
           if (done) return
           buffered += decoder.decode(value, { stream: true })
-          for (;;) {
-            const at = buffered.indexOf('\n\n')
-            if (at === -1) break
-            const block = buffered.slice(0, at)
-            buffered = buffered.slice(at + 2)
-            let name = 'message'
-            let data = ''
-            for (const field of block.split('\n')) {
-              if (field.startsWith('id: ')) lastEventId = field.slice(4)
-              else if (field.startsWith('event: ')) name = field.slice(7)
-              else if (field.startsWith('data: ')) data = field.slice(6)
+          const arrived = decodeEvents(buffered)
+          buffered = arrived.rest
+          for (const event of arrived.events) {
+            if (event.id !== undefined) lastEventId = event.id
+            for (const listener of listeners.get(event.name) ?? []) {
+              listener({ data: event.data, lastEventId })
             }
-            for (const listener of listeners.get(name) ?? []) listener({ data, lastEventId })
           }
         }
       })()

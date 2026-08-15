@@ -64,6 +64,77 @@ describe('the golden Frame log', () => {
     expect([...new Set(golden.map((frame) => frame.kind))].sort()).toEqual(kinds.sort())
   })
 
+  test('carries every field of a pass-through Frame onto its Message', () => {
+    // The field-level twin of the vocabulary test above. A Frame *kind* that
+    // reaches no Message breaks that literal; a Frame *field* that reaches no
+    // Message breaks nothing at all. Every field on both sides is optional, so
+    // a line forgotten in `reduce` typechecks, passes the suite, and surfaces
+    // as a blank spot on screen. `handle` needed the Frame, the Message and the
+    // copy between them edited in one commit (211320f); nothing would have said
+    // so had it not been.
+    //
+    // These five are the pass-through Messages — fields carrying straight from
+    // their Frame under the same name. They are deliberately not
+    // `Omit<XFrame, 'kind'>`, because a Message is named for what a viewer sees
+    // rather than for what the wire called it (transcript.ts). `Required` is
+    // what stands in for that: it makes every optional field mandatory *here*,
+    // so a field added to one of these Frames breaks this literal at typecheck,
+    // and the run then proves `reduce` actually carried it.
+    const populated: {
+      [K in 'image' | 'compacted' | 'reset' | 'recall' | 'hook']: { kind: K } & Required<
+        Omit<Extract<Frame, { kind: K }>, 'kind'>
+      >
+    } = {
+      image: {
+        kind: 'image',
+        mediaType: 'image/png',
+        data: 'iVBORw0KGgo=',
+        url: 'file:///shot.png',
+        handle: 'img-1',
+        toolCallId: 'toolu_shot',
+        thread: 'toolu_task',
+      },
+      compacted: {
+        kind: 'compacted',
+        trigger: 'auto',
+        preTokens: 190_000,
+        postTokens: 12_000,
+        durationMs: 1_400,
+      },
+      reset: { kind: 'reset', transcriptId: 'conv-2' },
+      recall: {
+        kind: 'recall',
+        mode: 'select',
+        memories: [{ path: 'CONTEXT.md', scope: 'team', content: 'Frame, not update' }],
+      },
+      hook: {
+        kind: 'hook',
+        id: 'hook-1',
+        name: 'PreToolUse',
+        hookEvent: 'PreToolUse',
+        status: 'error',
+        output: '.env is not readable',
+        stdout: 'checking',
+        stderr: 'refused',
+        exitCode: 2,
+      },
+    }
+
+    for (const kind of Object.keys(populated) as (keyof typeof populated)[]) {
+      const frame = populated[kind]
+      const { kind: discriminator, ...fields } = frame
+      const message = reduce([frame]).messages.at(-1) as Record<string, unknown> | undefined
+
+      for (const [field, value] of Object.entries(fields)) {
+        // Keyed by name so a drop reports which field went missing, rather
+        // than an undefined with nothing attached to it.
+        expect({ [`${discriminator}.${field}`]: message?.[field] }).toEqual({
+          [`${discriminator}.${field}`]: value,
+        })
+      }
+    }
+  })
+
   test('reduces to the Transcript a viewer sees', () => {
     const transcript = reduce(golden)
 

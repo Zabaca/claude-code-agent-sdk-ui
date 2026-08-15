@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import { classify, type ClassifyInput } from './classify.ts'
+import type { Frame } from './frame.ts'
 import { reduce } from './reduce.ts'
 import type { Message, Transcript } from './transcript.ts'
 
@@ -618,5 +619,65 @@ describe('the agent s deliberation', () => {
       { kind: 'text', text: 'Here it is.' },
       { kind: 'reasoning', text: 'a diff.' },
     ])
+  })
+})
+
+describe('what is not retained yet', () => {
+  const said = (text: string, thread?: string): Frame =>
+    thread === undefined ? { kind: 'text', text } : { kind: 'text', text, thread }
+
+  test('places a live block where it opened, not after everything retained', () => {
+    // The agent opened its block before the Thread's Frame was retained, so it
+    // stays ahead of it. Appended after the log instead — which is what the
+    // hook used to do — the two swap the moment the Thread finishes first.
+    const transcript = reduce([{ kind: 'prompt', text: 'audit both' }, said('Reading.', 'call-1')], {
+      live: [{ kind: 'text', text: 'Opening two', after: 1 }],
+    })
+
+    expect(transcript.messages).toEqual([
+      { kind: 'prompt', text: 'audit both' },
+      { kind: 'text', text: 'Opening two' },
+      { kind: 'text', text: 'Reading.', thread: 'call-1' },
+    ])
+  })
+
+  test('never grows a live block with a Frame that is not its own', () => {
+    // Prose coalesces into the Message before it. A block still being written
+    // is not one a Frame may grow: the Frame is the whole of its own block and
+    // the live copy is about to be dropped, so merging puts one block's words
+    // on the front of another's.
+    const transcript = reduce([said('First.')], {
+      live: [{ kind: 'text', text: 'Sec', after: 0 }],
+    })
+
+    expect(transcript.messages).toEqual([
+      { kind: 'text', text: 'Sec' },
+      { kind: 'text', text: 'First.' },
+    ])
+  })
+
+  test('holds a live deliberation back unless it is asked for', () => {
+    const live = [{ kind: 'reasoning', text: 'Hmm', after: 0 } as const]
+
+    expect(reduce([], { live }).messages).toEqual([])
+    expect(reduce([], { live, reasoning: true }).messages).toEqual([
+      { kind: 'reasoning', text: 'Hmm' },
+    ])
+  })
+
+  test('puts words still on their way last, and says the Turn is working', () => {
+    const transcript = reduce([said('Done.')], { sent: [{ text: 'and again' }] })
+
+    expect(transcript.messages).toEqual([
+      { kind: 'text', text: 'Done.' },
+      { kind: 'prompt', text: 'and again' },
+    ])
+    expect(transcript.turn).toEqual({ status: 'working' })
+  })
+
+  test('leaves a Transcript with none of either exactly as it was', () => {
+    const frames: Frame[] = [{ kind: 'prompt', text: 'hello' }, said('Hi.')]
+
+    expect(reduce(frames, { live: [], sent: [] })).toEqual(reduce(frames))
   })
 })

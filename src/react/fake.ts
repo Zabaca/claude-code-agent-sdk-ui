@@ -1,5 +1,6 @@
 import type { Frame } from '../core/frame.ts'
 import type { PartialText } from '../core/partial.ts'
+import { resumeFrom } from '../core/wire.ts'
 import type { AgentEventSource, AgentEventSourceFactory, AgentServerEvent } from './session.ts'
 
 /**
@@ -153,9 +154,3 @@ export function fakeSse(): FakeSse {
   }
 }
 
-/** `Last-Event-ID` names the last Frame that landed; resume with the next one. */
-function resumeFrom(lastEventId: string): number {
-  if (lastEventId === '') return 0
-  const last = Number.parseInt(lastEventId, 10)
-  return Number.isInteger(last) && last >= 0 ? last + 1 : 0
-}

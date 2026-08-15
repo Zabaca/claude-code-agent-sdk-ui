@@ -21,26 +21,14 @@
  *
  * One store per handler, so one per Session (ADR-0002). A handle from another
  * Session is a key this map never had, and resolves to nothing like any other.
- */
-
-/** Bytes the host is holding, and the type it will serve them as. */
-export type HeldImage = {
-  /** Always one of {@link SERVABLE} — never whatever arrived on the wire. */
-  mediaType: string
-  bytes: Uint8Array
-}
-
-/**
- * What a held image may be served as.
  *
- * The media type arrives on the wire, so it is attacker-shaped in exactly the
- * way a stored-XSS hole wants: a `text/html` "image" served back from the
- * handler's own origin is a script running where the Session lives. Nothing
- * outside this list is ever minted, so a picture that is not a picture is not
- * held — and the handle that would have named it resolves to nothing, which is
- * the same answer every unminted handle gets.
+ * What may be held at all is {@link holdable}, in `core`, because the composer
+ * and replay ask the same question and must get the same answer.
  */
-export const SERVABLE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+
+import { holdable, type HeldImage } from '../core/image.ts'
+
+export type { HeldImage }
 
 export type ImageStore = {
   /**
@@ -59,13 +47,10 @@ export function imageStore(): ImageStore {
 
   return {
     mint: (image) => {
-      const mediaType = image.mediaType
-      if (mediaType === undefined || !SERVABLE.has(mediaType)) return undefined
-      if (image.data === undefined || image.data === '') return undefined
-      const bytes = decode(image.data)
-      if (!bytes) return undefined
+      const picture = holdable(image)
+      if (!picture) return undefined
       const handle = fresh()
-      held.set(handle, { mediaType, bytes })
+      held.set(handle, picture)
       return handle
     },
     // Every branch of "no" is the same "no". A handle nobody minted, a handle
@@ -87,16 +72,4 @@ function fresh(): string {
   let hex = ''
   for (const byte of random) hex += byte.toString(16).padStart(2, '0')
   return `img_${hex}`
-}
-
-/** Base64 in, bytes out. Anything that is not base64 is not an image. */
-function decode(data: string): Uint8Array | undefined {
-  try {
-    const binary = atob(data)
-    const bytes = new Uint8Array(binary.length)
-    for (let at = 0; at < binary.length; at++) bytes[at] = binary.charCodeAt(at)
-    return bytes.length > 0 ? bytes : undefined
-  } catch {
-    return undefined
-  }
 }

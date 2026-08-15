@@ -1,4 +1,5 @@
 import type { Frame, SettledFrame } from '../src/core/frame.ts'
+import { decodeEvents, type WireEvent } from '../src/core/wire.ts'
 import type { AgentHandler } from '../src/server/handler.ts'
 
 /**
@@ -84,11 +85,10 @@ export async function sayHi(
       }
 
       buffered += decoder.decode(read.value, { stream: true })
-      let split = buffered.indexOf('\n\n')
-      while (split !== -1) {
-        const frame = frameIn(buffered.slice(0, split))
-        buffered = buffered.slice(split + 2)
-        split = buffered.indexOf('\n\n')
+      const arrived = decodeEvents(buffered)
+      buffered = arrived.rest
+      for (const event of arrived.events) {
+        const frame = frameIn(event)
         if (!frame) continue
         frames.push(frame)
 
@@ -118,13 +118,7 @@ function said(frames: Frame[]): string {
 }
 
 /** One SSE event, as the Frame it carried — `partial` events are not Frames. */
-function frameIn(raw: string): Frame | undefined {
-  let name = 'message'
-  let data = ''
-  for (const line of raw.split('\n')) {
-    if (line.startsWith('event:')) name = line.slice(6).trim()
-    else if (line.startsWith('data:')) data += line.slice(5).trim()
-  }
-  if (name !== 'frame' || data === '') return undefined
-  return JSON.parse(data) as Frame
+function frameIn(event: WireEvent): Frame | undefined {
+  if (event.name !== 'frame') return undefined
+  return JSON.parse(event.data) as Frame
 }

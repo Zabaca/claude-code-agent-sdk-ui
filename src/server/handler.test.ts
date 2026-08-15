@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { readdir } from 'node:fs/promises'
 
 import type { ClassifyInput } from '../core/classify.ts'
+import { decodeEvents } from '../core/wire.ts'
 import { fakeQuery } from './fake.ts'
 import { createAgentHandler } from './handler.ts'
 
@@ -791,12 +792,14 @@ async function read(response: Response, count: number): Promise<SseEvent[]> {
       const { value, done } = await reader.read()
       if (done) break
       buffered += decoder.decode(value, { stream: true })
-      let split = buffered.indexOf('\n\n')
-      while (split !== -1) {
-        const event = parse(buffered.slice(0, split))
-        buffered = buffered.slice(split + 2)
-        if (event) events.push(event)
-        split = buffered.indexOf('\n\n')
+      const arrived = decodeEvents(buffered)
+      buffered = arrived.rest
+      for (const event of arrived.events) {
+        events.push({
+          id: event.id,
+          name: event.name,
+          data: JSON.parse(event.data) as Record<string, unknown>,
+        })
       }
     }
   } finally {
@@ -804,25 +807,6 @@ async function read(response: Response, count: number): Promise<SseEvent[]> {
   }
 
   return events
-}
-
-function parse(raw: string): SseEvent | undefined {
-  let id: string | undefined
-  let name = 'message'
-  let data: string | undefined
-
-  for (const line of raw.split('\n')) {
-    const at = line.indexOf(':')
-    if (at <= 0) continue
-    const field = line.slice(0, at)
-    const value = line.slice(at + 1).trimStart()
-    if (field === 'id') id = value
-    if (field === 'event') name = value
-    if (field === 'data') data = value
-  }
-
-  if (data === undefined) return undefined
-  return { id, name, data: JSON.parse(data) as Record<string, unknown> }
 }
 
 // --- SDK messages the fake yields ---------------------------------------------

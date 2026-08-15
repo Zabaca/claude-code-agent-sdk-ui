@@ -57,7 +57,7 @@ test('core reaches nothing outside core', async () => {
   expect(outside).toEqual([])
   // Every module in `core` bar the fixtures, so this is the whole surface and
   // not the first file that happened to import nothing.
-  expect(reached.size).toBe(8)
+  expect(reached.size).toBe(9)
 })
 
 test('core imports no runtime at all — no react, no bun, no node', async () => {
