@@ -602,6 +602,63 @@ test('the working line is on screen only while the Turn runs', async () => {
   view.unmount()
 })
 
+test('the working line shows how full the context is, while the Turn is still running', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'read the whole repo' })
+  })
+  // No reading yet, so no number. A `0` here would be the working line
+  // reporting an empty context window rather than an unmeasured one.
+  expect(working()).not.toContain('tokens')
+
+  await act(async () => {
+    fake.frame({ kind: 'context', totalTokens: 52_000, maxTokens: 200_000 })
+  })
+  expect(working()).toContain('52,000 tokens')
+
+  // A second reading, still mid-Turn: the SDK attaches `context_usage` to every
+  // assistant message, so the count moves while the agent works. Read only at
+  // the end, the meter would sit on a stale figure for the whole Turn — which
+  // is the one stretch of time anybody is watching it.
+  await act(async () => {
+    fake.frame({ kind: 'context', totalTokens: 91_500, maxTokens: 200_000 })
+  })
+  expect(working()).toContain('91,500 tokens')
+  expect(there(screen.queryByRole('status'))).toBe(true)
+
+  view.unmount()
+})
+
+test('a rate limit is never read as a context reading', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'keep going' })
+    // The subscription meter, and only it. It answers "how much of my week is
+    // left"; the working line asks "how full is this conversation". A fallback
+    // from one to the other would put a number on screen that looks like a
+    // reading and is a reading of something else entirely.
+    fake.frame({ kind: 'rate-limit', status: 'allowed_warning', utilization: 0.62 })
+  })
+
+  expect(working()).not.toContain('tokens')
+  expect(working()).not.toContain('62')
+  expect(working()).not.toContain('0.62')
+
+  // And once the context meter does report, that is what the line shows — the
+  // rate limit sitting beside it changes nothing.
+  await act(async () => {
+    fake.frame({ kind: 'context', totalTokens: 52_000 })
+  })
+  expect(working()).toContain('52,000 tokens')
+  expect(working()).not.toContain('62%')
+
+  view.unmount()
+})
+
 test('the mode line reports what the runtime loaded, and is not a control', async () => {
   const fake = fakeSse()
   const view = await mount(fake)
@@ -1076,4 +1133,14 @@ export { recorder }
  */
 function there(node: Element | null | undefined): boolean {
   return node !== null && node !== undefined
+}
+
+/** What the working line reads, minus the stylesheet it carries inline. */
+function working(): string {
+  const status = screen.getByRole('status')
+  let text = status.textContent ?? ''
+  for (const style of status.querySelectorAll('style')) {
+    text = text.replace(style.textContent ?? '', '')
+  }
+  return text
 }
