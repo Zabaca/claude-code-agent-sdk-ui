@@ -664,31 +664,49 @@ test('deliberation is off the screen by default, and on it only when asked for',
   asked.unmount()
 })
 
-test('the reading on the working line is the one the recorded stream reported', async () => {
+test("the working line reports the conversation's window, never a sub-agent's", async () => {
   const fake = fakeSse()
   const view = await mount(fake)
 
-  // The golden log up to its own context reading, which lands while the Turn
-  // is still running. Driven from the recording rather than from numbers
-  // invented here: a working line wired to a shape nobody ever sends is wired
-  // to nothing, and every synthetic Frame above this shares that risk.
-  const upToReading = golden.slice(0, golden.findIndex((frame) => frame.kind === 'context') + 1)
-  expect(upToReading.some((frame) => frame.kind === 'settled' || frame.kind === 'failed')).toBe(
-    false,
+  // The recorded stream takes two context readings: one inside the Thread the
+  // `Task` call opened, and one for the agent's own window. Both are read off
+  // the fixture rather than restated, so a regenerated golden file can still
+  // disagree with this test — every other test of the count builds its own
+  // Frame, and a line wired to a shape nobody sends is wired to nothing.
+  const readings = golden.flatMap((frame, at) =>
+    frame.kind === 'context' ? [{ at, thread: frame.thread, tokens: frame.totalTokens }] : [],
   )
+  const threaded = readings.find((one) => one.thread !== undefined)
+  const own = readings.find((one) => one.thread === undefined)
+  if (!threaded || !own) throw new Error('the golden log needs both a Thread reading and its own')
+
+  // Both land while the Turn is still running, so the working line is on
+  // screen for each — including for the one it must refuse to draw.
+  const ended = golden.findIndex((frame) => frame.kind === 'settled' || frame.kind === 'failed')
+  expect(threaded.at).toBeLessThan(own.at)
+  expect(own.at).toBeLessThan(ended)
 
   await act(async () => {
-    for (const frame of upToReading) fake.frame(frame)
+    for (const frame of golden.slice(0, threaded.at + 1)) fake.frame(frame)
   })
 
-  const reading = upToReading.at(-1)
-  expect(reading?.kind).toBe('context')
-  // The recorded figure, read off the fixture rather than restated — restating
-  // it here would make the test agree with itself when the fixture is
-  // regenerated and the wiring has quietly stopped passing it through.
-  expect(working()).toContain(
-    reading?.kind === 'context' ? reading.totalTokens.toLocaleString('en-US') : 'no reading',
-  )
+  // A sub-agent's window is not the conversation's. This is #17 at the seam a
+  // person actually reads: the Thread's 7,000 used to land on the Session
+  // meter, so the line drawn next to the conversation reported a background
+  // agent's window — a number that is not about the thing it is drawn beside.
+  // The meter is on screen and has nothing to say yet, which is the correct
+  // silence: guarded in `core` and at the hook, and until now nowhere here.
+  expect(working()).not.toContain(threaded.tokens.toLocaleString('en-US'))
+  expect(working()).not.toContain('tokens')
+
+  await act(async () => {
+    for (const frame of golden.slice(threaded.at + 1, own.at + 1)) fake.frame(frame)
+  })
+
+  expect(working()).toContain(`${own.tokens.toLocaleString('en-US')} tokens`)
+  // And the Thread's reading never appears — not before its own arrives, and
+  // not after it either.
+  expect(working()).not.toContain(threaded.tokens.toLocaleString('en-US'))
 
   view.unmount()
 })

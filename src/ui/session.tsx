@@ -137,7 +137,12 @@ export function ClaudeSession({
           the other "how much of my week is left", and a line that quietly
           substitutes one for the other reads as a measurement while being a
           different measurement. Until a `context` Frame has arrived there is
-          no reading, and `ClaudeThinking` shows no number at all. */}
+          no reading, and `ClaudeThinking` shows no number at all.
+
+          `transcript.context` is the thread-less reading — the conversation's
+          own window, never a Thread's (#17). That matters most right here,
+          with the Thread meters drawn immediately above: two meters side by
+          side, each reporting the thing it is drawn next to. */}
       {working ? (
         <ClaudeThinking
           running
