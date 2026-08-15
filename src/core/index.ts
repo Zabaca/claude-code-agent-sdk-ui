@@ -7,4 +7,8 @@ export type * from './composer.ts'
 export type * from './event.ts'
 export type * from './frame.ts'
 export type * from './partial.ts'
+// Threads as relations over a Transcript. `ui` re-exports these so a host
+// drawing its own screen still finds them beside the components.
+export { arrange, threadOf, threadsOf } from './thread.ts'
+export type * from './thread.ts'
 export type * from './transcript.ts'
