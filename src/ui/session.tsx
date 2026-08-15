@@ -77,7 +77,7 @@ export function ClaudeSession({
   const [highlighted, setHighlighted] = React.useState(0)
   const { transcript } = session
   const working = transcript.turn.status === 'working'
-  const opened = useThreads(transcript.messages, clock)
+  const opened = useThreads(transcript, clock)
   const byThread = new Map(opened.map((thread) => [thread.thread, thread]))
 
   // What the runtime advertises, narrowed to what has been typed. Derived every

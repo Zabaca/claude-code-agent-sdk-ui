@@ -46,6 +46,7 @@ export {
   type ThreadClock,
   type ThreadDisplay,
   type ThreadReading,
+  type ThreadSource,
   type ThreadState,
 } from "./thread.tsx";
 export { ClaudeThinking } from "./claude-thinking.tsx";

@@ -319,6 +319,11 @@ const THREE_THREADS: Beat[] = [
     thread: 'toolu_task_core',
     takes: 450,
   }),
+  // Two windows reported in the same breath, and the whole of #17 on screen:
+  // the Thread's 7.4k is drawn on the Thread's meter and the main agent's 186k
+  // is not, where before either would have overwritten the other.
+  { after: 200, frame: { kind: 'context', thread: 'toolu_task_core', totalTokens: 7400 } },
+  { frame: { kind: 'context', totalTokens: 186000, maxTokens: 200000, percentage: 93 } },
   // The main agent is still working while they run, which is what makes
   // attribution worth anything: this line is nobody's Thread.
   ...prose('Two are back; the third is still reading.', { block: 8 }),

@@ -155,6 +155,12 @@ test('replay shows three Threads running at once, told apart and metered', async
   expect(reads('toolu_task_server')).toContain('audit server')
   expect(reads('toolu_task_server')).toContain('general-purpose')
   expect(reads('toolu_task_ui')).toContain('audit ui')
+
+  // The Thread that reported a window shows it; the two that did not show no
+  // figure — not a zero, and not the main agent's 186k borrowed as theirs.
+  expect(reads('toolu_task_core')).toContain('7.4k context')
+  expect(reads('toolu_task_ui')).not.toContain('context')
+  expect(reads('toolu_task_ui')).not.toContain('186k')
   view.unmount()
 })
 

@@ -212,6 +212,23 @@ test('three concurrent Threads stay apart, and none of their work becomes the ma
   // surface exists to end.
   expect(new Set(hues()).size).toBe(3)
 
+  // One Thread says how full its own window is. That reading rides on an
+  // assistant message carrying the Thread's id, so this is also the whole of
+  // #17 driven through the real wire: the number has to land on the Thread it
+  // belongs to and nowhere else.
+  // The main agent reports its own window in the same breath, and much fuller
+  // — which is the pair that makes this a real check. Before #17 the second of
+  // these two readings simply overwrote the first, whichever way round they
+  // arrived.
+  await said(sdk, holding('toolu_task_core', 7_400), holding(null, 190_000))
+  expect(meter('toolu_task_core')).toContain('7.4k context')
+  // And nothing is invented for the two that have not said. A zero would be
+  // the screen making up a number for a window it has never seen; the Session's
+  // 190k borrowed as theirs would be worse, because it looks like a reading.
+  expect(meter('toolu_task_ui')).not.toContain('context')
+  expect(meter('toolu_task_server')).not.toContain('context')
+  expect(meter('toolu_task_ui')).not.toContain('190k')
+
   // One finishes. Its meter stops and reads as complete; the other two are
   // still going, so a meter keyed to Turn state rather than to its own Thread
   // would stop all three here.
@@ -433,6 +450,24 @@ function opening(
           prompt: `Audit and report: ${task.description}`,
         },
       })),
+    },
+  }
+}
+
+/**
+ * A Thread reporting how full its own window is. The SDK hangs `context_usage`
+ * off an assistant message, and that message names the Thread — which is what
+ * makes a per-Thread token figure possible at all.
+ */
+function holding(thread: string | null, totalTokens: number): ClassifyInput {
+  return {
+    type: 'assistant',
+    parent_tool_use_id: thread,
+    message: { role: 'assistant', content: [] },
+    context_usage: {
+      model: 'claude-haiku-4',
+      total_tokens: totalTokens,
+      raw_max_tokens: 200000,
     },
   }
 }

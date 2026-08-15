@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 
-import type { Message, ToolCallMessage } from '../core/transcript.ts'
+import type { Message, ToolCallMessage, Transcript } from '../core/transcript.ts'
 import { cn } from './lib/cn.ts'
 
 /**
@@ -20,21 +20,26 @@ import { cn } from './lib/cn.ts'
  *
  * ## What the meter can honestly say
  *
- * `core` carries a Thread's identity, its description, its subagent type and —
- * by counting — its tool calls. It carries **no per-Thread token count** and
- * **no clock**, so this file shows neither a token figure nor a duration it
- * cannot stand behind:
+ * `core` carries a Thread's identity, its description, its subagent type, its
+ * context window and — by counting — its tool calls. Two numbers need saying
+ * precisely, because the near miss on each is a screen that looks measured and
+ * is not:
  *
- * - **Tokens** are absent from the Frame vocabulary per Thread. `CostFrame`
- *   reports the main loop and a per-model total; `ContextFrame` is emitted
- *   without the Thread it came from. So no token figure is drawn. A zero, or a
- *   Session-wide number relabelled as a Thread's, would be the screen making
- *   something up.
+ * - **Tokens** here are the Thread's **context window**: how much it is
+ *   currently holding, from the `context_usage` the SDK hangs off an assistant
+ *   message that names its Thread. That is not cumulative spend. Spend per
+ *   Thread does not exist on the wire — `CostFrame.usage` is the main loop and
+ *   `byModel` is per-model, Session-wide and only at Turn end — so the figure
+ *   is labelled "context" rather than "tokens", and a Thread that has reported
+ *   no reading shows no figure at all rather than a zero.
  * - **Elapsed** is measured by this renderer, because no Frame carries a
  *   timestamp. It is therefore "how long this screen has been watching", and it
  *   is only claimed for a Thread whose opening call this screen saw *pending*.
  *   A Thread that was already finished when the log was replayed gets no
- *   duration at all rather than a fabricated `0s`.
+ *   duration at all rather than a fabricated `0s`. A Thread this screen joined
+ *   mid-flight — a reload while a sub-agent is running — is timed from first
+ *   sight, so its duration is a lower bound. Closing that needs a timestamp on
+ *   the wire, which is a spec change rather than a fix here.
  */
 
 /** How a Thread's Messages are placed in the Transcript. */
@@ -119,6 +124,11 @@ export type ThreadReading = {
   /** Tool calls made inside the Thread. */
   toolCalls: number
   /**
+   * How much its own context window the Thread is holding, when it has said.
+   * Not spend: see the note at the top of this file.
+   */
+  contextTokens?: number
+  /**
    * How long this screen has watched it, in milliseconds. Absent for a Thread
    * whose work was already over the first time it was seen — see the note at
    * the top of this file.
@@ -127,13 +137,21 @@ export type ThreadReading = {
 }
 
 /**
+ * What the meter reads from. The two parts of a Transcript a Thread is
+ * described by: the Messages that name it, and the windows `reduce` files
+ * against it.
+ */
+export type ThreadSource = Pick<Transcript, 'messages' | 'threadContext'>
+
+/**
  * Every Thread the Transcript opened, in the order it opened them.
  *
  * A Thread's state is its opening `Task` call's status, not the Turn's: a Turn
  * runs many Threads and they do not all end together, so a meter keyed to the
  * Turn would stop three Threads because one of them finished.
  */
-export function threadsOf(messages: readonly Message[]): ThreadReading[] {
+export function threadsOf(transcript: ThreadSource): ThreadReading[] {
+  const { messages, threadContext } = transcript
   const readings: ThreadReading[] = []
   const at = new Map<string, number>()
 
@@ -150,6 +168,10 @@ export function threadsOf(messages: readonly Message[]): ThreadReading[] {
         subagentType,
         state: stateOf(message),
         toolCalls: 0,
+        // Absent until the Thread reports a reading of its own. `reduce` keeps
+        // these apart from the Session's window on purpose (#17), and reaching
+        // for the Session's number here would undo that in the drawing.
+        contextTokens: threadContext[thread]?.totalTokens,
       }),
     )
   }
@@ -210,10 +232,10 @@ type Watch = {
  * working.
  */
 export function useThreads(
-  messages: readonly Message[],
+  transcript: ThreadSource,
   clock: ThreadClock = REAL_CLOCK,
 ): ThreadReading[] {
-  const readings = threadsOf(messages)
+  const readings = threadsOf(transcript)
   const watched = React.useRef(new Map<string, Watch>())
   const [, redraw] = React.useState(0)
   const running = readings.some((reading) => reading.state === 'running')
@@ -313,9 +335,19 @@ function ThreadMeter({ thread }: { thread: ThreadReading }) {
           <span data-thread-elapsed={thread.elapsedMs}>{lasting(thread.elapsedMs)}</span>
         </>
       )}
-      {/* No token figure: `core` carries no per-Thread token count, and a zero
-          drawn here would be the screen inventing one. See the note at the top
-          of this file. */}
+      {/* Called "context", not "tokens", because that is what it is: how much
+          of its own window the Thread is holding. Cumulative spend per Thread
+          is not on the wire, and labelling one as the other would be the
+          screen naming a number after something it did not measure. A Thread
+          that has reported no window shows nothing here rather than a zero. */}
+      {thread.contextTokens === undefined ? null : (
+        <>
+          <span aria-hidden>·</span>
+          <span data-thread-context={thread.contextTokens} title="context window in use">
+            {thousands(thread.contextTokens)} context
+          </span>
+        </>
+      )}
     </div>
   )
 }
@@ -354,6 +386,17 @@ const HUES = [
 
 export function hueOf(ordinal: number): string {
   return HUES[(ordinal - 1) % HUES.length] as string
+}
+
+/** A token count, the way a terminal says it: `840`, `7.4k`, `190k`. */
+export function thousands(tokens: number): string {
+  if (tokens < 1000) return String(tokens)
+  const thousand = tokens / 1000
+  return `${thousand < 100 ? trimmed(thousand.toFixed(1)) : String(Math.round(thousand))}k`
+}
+
+function trimmed(fixed: string): string {
+  return fixed.endsWith('.0') ? fixed.slice(0, -2) : fixed
 }
 
 /** How long, the way a terminal says it. */
