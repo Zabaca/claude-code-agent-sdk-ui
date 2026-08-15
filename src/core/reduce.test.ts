@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import { classify, type ClassifyInput } from './classify.ts'
 import type { Frame } from './frame.ts'
-import { reduce } from './reduce.ts'
+import { reduce, type Pending } from './reduce.ts'
 import type { Message, Transcript } from './transcript.ts'
 
 /** The seam under test: fixture SDK messages in, Transcript out. */
@@ -631,7 +631,7 @@ describe('what is not retained yet', () => {
     // stays ahead of it. Appended after the log instead — which is what the
     // hook used to do — the two swap the moment the Thread finishes first.
     const transcript = reduce([{ kind: 'prompt', text: 'audit both' }, said('Reading.', 'call-1')], {
-      live: [{ kind: 'text', text: 'Opening two', after: 1 }],
+      pending: [{ kind: 'text', text: 'Opening two', after: 1 }],
     })
 
     expect(transcript.messages).toEqual([
@@ -641,13 +641,41 @@ describe('what is not retained yet', () => {
     ])
   })
 
+  test('keeps a person\'s unretained words above the answer to them', () => {
+    // The bug this was found by: send "hi", and the agent's reply arrived
+    // *above* it. Words the person sent are not the newest thing on screen the
+    // moment the agent starts answering — they were sent before the answer, and
+    // they belong where they were sent.
+    const transcript = reduce([said('Hello there.')], {
+      pending: [{ kind: 'prompt', text: 'hi', after: 0 }],
+    })
+
+    expect(transcript.messages).toEqual([
+      { kind: 'prompt', text: 'hi' },
+      { kind: 'text', text: 'Hello there.' },
+    ])
+  })
+
+  test('keeps unretained things in the order they happened', () => {
+    // A person typing while the agent writes. Both are waiting on the log, and
+    // neither is automatically the newer — so the order they are given in is
+    // the order they happened in, and nothing here second-guesses it.
+    const pending: Pending[] = [
+      { kind: 'text', text: 'Working on it', after: 0 },
+      { kind: 'prompt', text: 'actually, stop', after: 0 },
+    ]
+    const transcript = reduce([], { pending })
+
+    expect(transcript.messages.map((message) => message.kind)).toEqual(['text', 'prompt'])
+  })
+
   test('never grows a live block with a Frame that is not its own', () => {
     // Prose coalesces into the Message before it. A block still being written
     // is not one a Frame may grow: the Frame is the whole of its own block and
     // the live copy is about to be dropped, so merging puts one block's words
     // on the front of another's.
     const transcript = reduce([said('First.')], {
-      live: [{ kind: 'text', text: 'Sec', after: 0 }],
+      pending: [{ kind: 'text', text: 'Sec', after: 0 }],
     })
 
     expect(transcript.messages).toEqual([
@@ -657,27 +685,23 @@ describe('what is not retained yet', () => {
   })
 
   test('holds a live deliberation back unless it is asked for', () => {
-    const live = [{ kind: 'reasoning', text: 'Hmm', after: 0 } as const]
+    const pending = [{ kind: 'reasoning', text: 'Hmm', after: 0 } as const]
 
-    expect(reduce([], { live }).messages).toEqual([])
-    expect(reduce([], { live, reasoning: true }).messages).toEqual([
+    expect(reduce([], { pending }).messages).toEqual([])
+    expect(reduce([], { pending, reasoning: true }).messages).toEqual([
       { kind: 'reasoning', text: 'Hmm' },
     ])
   })
 
-  test('puts words still on their way last, and says the Turn is working', () => {
-    const transcript = reduce([said('Done.')], { sent: [{ text: 'and again' }] })
+  test('says the Turn is working while the person\'s words are still in flight', () => {
+    const transcript = reduce([said('Done.')], { pending: [{ kind: 'prompt', text: 'and again', after: 1 }] })
 
-    expect(transcript.messages).toEqual([
-      { kind: 'text', text: 'Done.' },
-      { kind: 'prompt', text: 'and again' },
-    ])
     expect(transcript.turn).toEqual({ status: 'working' })
   })
 
-  test('leaves a Transcript with none of either exactly as it was', () => {
+  test('leaves a Transcript with nothing pending exactly as it was', () => {
     const frames: Frame[] = [{ kind: 'prompt', text: 'hello' }, said('Hi.')]
 
-    expect(reduce(frames, { live: [], sent: [] })).toEqual(reduce(frames))
+    expect(reduce(frames, { pending: [] })).toEqual(reduce(frames))
   })
 })

@@ -6,7 +6,7 @@ import type { ClaudeEffort, ClaudeMode } from '../core/composer.ts'
 import type { AgentEvent, PromptEvent, PromptImage } from '../core/event.ts'
 import type { Frame } from '../core/frame.ts'
 import { blockAt, isPartialKind, type PartialKind, type PartialText } from '../core/partial.ts'
-import { reduce } from '../core/reduce.ts'
+import { reduce, type Pending } from '../core/reduce.ts'
 import type { Transcript } from '../core/transcript.ts'
 
 /**
@@ -113,11 +113,26 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   // holds `reduce` to. Assembling the tail here instead is what used to move
   // the agent's words out from under their own React key whenever a Thread
   // streamed beside them.
-  const transcript = useMemo(
-    (): Transcript =>
-      reduce(present(state.frames), { reasoning, live: state.live, sent: state.sent }),
-    [state.frames, state.live, state.sent, reasoning],
-  )
+  const transcript = useMemo((): Transcript => {
+    // Both kinds of unretained thing, in the order they happened. A person
+    // typing while the agent writes and an agent answering something just sent
+    // are the same situation from opposite ends: the only thing that orders
+    // them is which came first, which is what the mark on each records.
+    const pending: (Pending & { seq: number })[] = [
+      ...state.live.map((block) => ({
+        ...compact<Pending>({ kind: block.kind, text: block.text, thread: block.thread, after: block.after }),
+        seq: block.opened,
+      })),
+      ...state.sent.map((one) => ({
+        kind: 'prompt' as const,
+        text: one.text,
+        after: one.after,
+        seq: one.at,
+      })),
+    ].sort((a, b) => a.seq - b.seq)
+
+    return reduce(present(state.frames), { reasoning, pending })
+  }, [state.frames, state.live, state.sent, reasoning])
 
   const mode = useMemo(
     () => modeOf(transcript.harness?.permissionMode) ?? options.mode ?? 'auto',
@@ -295,10 +310,12 @@ type Live = {
    * arrives around it.
    */
   after: number
+  /** When it opened, against everything else waiting on the log. */
+  opened: number
 }
 
 /** A person's words, shown before the handler has retained them. */
-type Sent = { at: number; text: string }
+type Sent = { at: number; text: string; after: number }
 
 type Arrival =
   | { type: 'frame'; index: number; body: string }
@@ -354,6 +371,7 @@ function step(state: SessionState, arrival: Arrival): SessionState {
         // walks the log without one. Blocks opened at the same count keep
         // their relative order, which is the order they are held in.
         after: state.live[held]?.after ?? present(state.frames).length,
+        opened: state.live[held]?.opened ?? mark(),
       })
       if (held === -1) return { ...state, live: [...state.live, block] }
       const live = state.live.slice()
@@ -364,7 +382,10 @@ function step(state: SessionState, arrival: Arrival): SessionState {
       // The last refusal stops being worth reporting the moment fresh words are
       // on their way, so it is dropped rather than left standing.
       const { error, ...rest } = state
-      return { ...rest, sent: [...state.sent, { at: arrival.at, text: arrival.text }] }
+      return {
+        ...rest,
+        sent: [...state.sent, { at: arrival.at, text: arrival.text, after: present(state.frames).length }],
+      }
     }
     case 'unsent':
       return {

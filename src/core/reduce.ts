@@ -43,10 +43,11 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
   const threadContext: Record<string, ContextUsage> = {}
   let turn: Turn = { status: 'idle' }
 
-  const live = options.live ?? []
-  const sent = options.sent ?? []
-  /** How many live blocks have taken their place. They are given in start order. */
-  let opened = 0
+  const pending = options.pending ?? []
+  /** How many pending Messages have taken their place. Given in order. */
+  let placed = 0
+  /** Where the latest Turn ended, so words sent before it are not a new one. */
+  let ended = -1
   /**
    * Where the live blocks sit. Prose coalesces into the Message before it, and
    * a block still being written is not one a Frame may grow: the Frame is the
@@ -65,19 +66,23 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
    * Thread's Frame landed beside it.
    */
   const place = (upTo: number): void => {
-    while (opened < live.length) {
-      const block = live[opened]
-      if (!block || block.after > upTo) break
-      opened += 1
+    while (placed < pending.length) {
+      const one = pending[placed]
+      if (!one || one.after > upTo) break
+      placed += 1
+      if (one.kind === 'prompt') {
+        messages.push({ kind: 'prompt', text: one.text })
+        continue
+      }
       // The same rule the retained deliberation is held to, applied to the
       // block still being written: thinking is not an answer either way.
-      if (block.kind === 'reasoning' && options.reasoning !== true) continue
+      if (one.kind === 'reasoning' && options.reasoning !== true) continue
       streaming.add(messages.length)
       messages.push(
         compact<TextMessage | ReasoningMessage>({
-          kind: block.kind,
-          text: block.text,
-          thread: block.thread,
+          kind: one.kind,
+          text: one.text,
+          thread: one.thread,
         }),
       )
     }
@@ -258,6 +263,7 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
       }
       case 'settled':
         turn = { status: 'idle' }
+        ended = at
         messages.push(
           compact<OutcomeMessage>({
             kind: 'outcome',
@@ -279,6 +285,7 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
         )
         break
       case 'failed': {
+        ended = at
         const stopped = interrupted(frame)
         turn = stopped
           ? { status: 'idle' }
@@ -309,35 +316,38 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
     }
   }
 
-  // Blocks opened after the last retained Frame, and then the words on their
-  // way to the handler — which are the newest thing there is, so they go last.
+  // Whatever opened after the last retained Frame.
   place(Number.POSITIVE_INFINITY)
-  for (const one of sent) messages.push({ kind: 'prompt', text: one.text })
   // Words in flight are a Turn about to start. Showing them beside an idle Turn
   // would say the agent had already finished with them.
-  if (sent.length > 0) turn = { status: 'working' }
+  //
+  // Only words sent *since* the latest Turn ended, though. Applied to all of
+  // them, this overrides an ending the runtime has already reported: a prompt
+  // Frame that never matches the optimistic Message — which is every live Turn,
+  // if the runtime does not echo the words back verbatim — leaves them in
+  // flight forever, and the working line runs on past the answer. Words sent
+  // before the Turn ended are that Turn's, and its own outcome stands.
+  if (pending.some((one) => one.kind === 'prompt' && one.after > ended)) {
+    turn = { status: 'working' }
+  }
 
   return { ...compact<SessionState>(state), messages, turn, threadContext }
 }
 
 /**
- * A block of prose still being written. Not retained — the log holds whole
- * Messages — so it is not a Frame, and it is gone the moment its Frame lands.
+ * Something on screen that the log has not retained yet — prose still being
+ * written, or words on their way to the handler.
+ *
+ * One list rather than two, in the order the things happened. Neither kind is
+ * automatically the newer: a person typing while the agent writes and an agent
+ * answering something just sent are the same situation from opposite ends, and
+ * the only thing that orders them is which came first. Kept apart, the answer
+ * arrived above the question.
  */
-export type LiveText = {
-  kind: PartialKind
-  text: string
-  thread?: string
-  /**
-   * How many Frames had been retained when the block opened, which is where it
-   * belongs in the order. Without it a block written while a Thread is also
-   * streaming loses its place to the Thread's Frame.
-   */
-  after: number
-}
-
-/** A person's words, on screen before the handler has retained them. */
-export type SentPrompt = { text: string }
+export type Pending = { after: number } & (
+  | { kind: PartialKind; text: string; thread?: string }
+  | { kind: 'prompt'; text: string }
+)
 
 /** What `reduce` reads besides the Frames. */
 export type ReduceOptions = {
@@ -347,15 +357,13 @@ export type ReduceOptions = {
    */
   reasoning?: boolean
   /**
-   * Blocks still being written, in the order they were started. Given here
+   * What is on screen but not in the log, in the order it happened. Given here
    * rather than stitched on afterwards because placing a Message is this
    * module's job: a caller that appends its own loses the one property the
    * Transcript has to have — that an index means the same Message for as long
    * as it is on screen.
    */
-  live?: readonly LiveText[]
-  /** Words sent but not yet retained. */
-  sent?: readonly SentPrompt[]
+  pending?: readonly Pending[]
 }
 
 /**

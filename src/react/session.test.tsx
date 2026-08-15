@@ -164,11 +164,46 @@ test('a prompt nobody at the keyboard wrote settles nothing of theirs', async ()
     fake.frame({ kind: 'prompt', text: 'carry on', origin: { kind: 'discord', from: 'someone' } })
   })
 
+  // Four Messages, and in the order they happened: the person's two words went
+  // first and stay first. They used to be pushed below both Frames, because
+  // anything unretained was treated as newer than everything retained — which
+  // is the same rule that put an agent's answer above the question.
   expect(session.current.transcript.messages).toEqual([
+    { kind: 'prompt', text: 'carry on' },
+    { kind: 'prompt', text: 'carry on' },
     { kind: 'prompt', text: 'carry on', synthetic: true },
     { kind: 'prompt', text: 'carry on', origin: { kind: 'discord', from: 'someone' } },
-    { kind: 'prompt', text: 'carry on' },
-    { kind: 'prompt', text: 'carry on' },
+  ])
+})
+
+test('a Turn that ends stops the working line, even if nothing settled the words', async () => {
+  // The second half of the same bug. `sent` forcing a working Turn is what puts
+  // the working line up before the runtime has said anything — but it was
+  // applied last, so it also overrode a Turn the runtime had said was over.
+  // A prompt Frame that never matches leaves the words in flight forever, and
+  // the screen said "thinking" after the answer had arrived and finished.
+  //
+  // Reachable in live mode and nowhere else: replay retains the person's words
+  // verbatim, so the optimistic Message always settles there.
+  const fake = fakeSse()
+  const wire = recorder()
+  const session = await mount(fake, { fetch: wire.fetch })
+
+  await act(async () => session.current.send('hi'))
+  expect(session.current.transcript.turn).toEqual({ status: 'working' })
+
+  await act(async () => {
+    fake.frame({ kind: 'text', text: 'Hello there.' })
+    fake.frame({ kind: 'settled', result: 'Hello there.' })
+  })
+
+  // The runtime says the Turn is over, so it is over.
+  expect(session.current.transcript.turn).toEqual({ status: 'idle' })
+  // And the words are still on screen, above the answer to them.
+  expect(session.current.transcript.messages).toEqual([
+    { kind: 'prompt', text: 'hi' },
+    { kind: 'text', text: 'Hello there.' },
+    { kind: 'outcome', outcome: 'settled', result: 'Hello there.' },
   ])
 })
 
