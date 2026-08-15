@@ -3,7 +3,7 @@ import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import { classify, type ClassifyInput } from '../core/classify.ts'
 import type { PromptImage } from '../core/event.ts'
 import type { FailedFrame, Frame, ImageFrame, SettledFrame, SlashCommandInfo } from '../core/frame.ts'
-import type { PartialText } from '../core/partial.ts'
+import { blockAt, type PartialKind, type PartialText } from '../core/partial.ts'
 import { imageStore, SERVABLE, type ImageStore } from './images.ts'
 import { pushable, type Pushable } from './pushable.ts'
 
@@ -149,7 +149,7 @@ class AgentSession {
    */
   readonly #images: ImageStore = imageStore()
   /** Text and reasoning blocks open right now, keyed by Thread and block index. */
-  readonly #open = new Map<string, { kind: 'text' | 'reasoning'; text: string; thread?: string }>()
+  readonly #open = new Map<string, { kind: PartialKind; text: string; thread?: string }>()
 
   #query: AgentQuery | undefined
   #input: Pushable<AgentPromptMessage> | undefined
@@ -473,7 +473,7 @@ class AgentSession {
 
     const block = num(body['index'])
     if (block === undefined) return
-    const at = `${thread ?? ''}#${block}`
+    const at = blockAt({ block, thread })
 
     if (type === 'content_block_start') {
       const started = record(body['content_block'])
@@ -685,7 +685,7 @@ function strings(value: unknown): string[] | undefined {
   return kept.length > 0 ? kept : undefined
 }
 
-function blockKind(type: string | undefined): 'text' | 'reasoning' | undefined {
+function blockKind(type: string | undefined): PartialKind | undefined {
   if (type === 'text') return 'text'
   if (type === 'thinking') return 'reasoning'
   return undefined

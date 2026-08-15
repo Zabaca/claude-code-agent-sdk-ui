@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { ClaudeEffort, ClaudeMode } from '../core/composer.ts'
 import type { AgentEvent, PromptEvent, PromptImage } from '../core/event.ts'
 import type { Frame } from '../core/frame.ts'
-import type { PartialText } from '../core/partial.ts'
+import { blockAt, isPartialKind, type PartialKind, type PartialText } from '../core/partial.ts'
 import { reduce } from '../core/reduce.ts'
 import type { Message, ReasoningMessage, TextMessage, Transcript } from '../core/transcript.ts'
 
@@ -287,7 +287,7 @@ type SessionState = {
 type Live = {
   /** Thread and block index together, which is what identifies a block. */
   at: string
-  kind: 'text' | 'reasoning'
+  kind: PartialKind
   text: string
   thread?: string
 }
@@ -326,8 +326,8 @@ function step(state: SessionState, arrival: Arrival): SessionState {
     }
     case 'partial': {
       const partial = parse<PartialText>(arrival.body)
-      if (!partial || (partial.kind !== 'text' && partial.kind !== 'reasoning')) return state
-      const at = `${partial.thread ?? ''}#${partial.block}`
+      if (!partial || !isPartialKind(partial.kind)) return state
+      const at = blockAt(partial)
       const block = compact<Live>({
         at,
         kind: partial.kind,

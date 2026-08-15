@@ -18,11 +18,34 @@ export type PartialText = {
   /** The content block, as the SDK indexes it within the Message. */
   block: number
   /** Which Frame the block becomes once it closes. */
-  kind: 'text' | 'reasoning'
+  kind: PartialKind
   /** Everything the block holds so far. Replace what you had; do not append. */
   text: string
   /** The block closed: this is the whole of it, and its Frame follows. */
   done?: true
   /** The Thread this work belongs to; absent for the agent's own work. */
   thread?: string
+}
+
+/** What a block closes into. The two Frame kinds prose can become. */
+export type PartialKind = 'text' | 'reasoning'
+
+/**
+ * Which block this is. A block is identified by its Thread *and* its index,
+ * never by the index alone: `forwardSubagentText` puts three Threads' prose on
+ * the same path as the agent's own, and they all start at block 0. Keyed by
+ * index alone, a sub-agent's words grow whichever bubble was opened last and
+ * land inside the answer to the person.
+ *
+ * Here, and not once in the handler and again in the browser, because the two
+ * halves agreeing is the whole point — and two string literals that happen to
+ * match is not agreement, it is a coincidence nothing would report the end of.
+ */
+export function blockAt(of: { block: number; thread?: string | undefined }): string {
+  return `${of.thread ?? ''}#${of.block}`
+}
+
+/** Whether what arrived off the wire says one of the two kinds. */
+export function isPartialKind(kind: unknown): kind is PartialKind {
+  return kind === 'text' || kind === 'reasoning'
 }
