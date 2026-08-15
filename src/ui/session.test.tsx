@@ -985,6 +985,12 @@ test('an image is drawn from its handle, and says who put it there', async () =>
   // Drawn from the handle and from nothing else. A `src` that were a data URI
   // or a path would mean the Message had named a location, which is the thing
   // the whole handle discipline exists to prevent.
+  //
+  // Nothing here passes `imageSrc`, so this is the hook's own default and the
+  // shape the handler actually serves: the handle as a query parameter against
+  // this Session's endpoint. Pinned rather than left incidental, because the
+  // option added for replay must not change what every other caller gets.
+  expect(pasted?.src).toBe(`${endpoint}?image=img_pasted`)
   expect(pasted?.src).toContain('img_pasted')
   expect(shown?.src).toContain('img_shown')
   for (const picture of pictures()) {

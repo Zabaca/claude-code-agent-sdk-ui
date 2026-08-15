@@ -38,7 +38,14 @@ export function Playground({
   )
 
   const options: AgentSessionOptions = replay
-    ? { endpoint: 'replay', createEventSource: replay.createEventSource, fetch: replay.fetch }
+    ? {
+        endpoint: 'replay',
+        createEventSource: replay.createEventSource,
+        fetch: replay.fetch,
+        // Replay stands in for every piece of transport, images included:
+        // there is no host here to hold a picture, so replay holds its own.
+        imageSrc: replay.imageSrc,
+      }
     : { endpoint }
 
   const session = useAgentSession(options)

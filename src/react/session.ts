@@ -86,10 +86,13 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
    * travels as a query parameter, never as a path segment, so there is nothing
    * here for a `../` to traverse even before the host's map lookup refuses it.
    */
+  const resolve = options.imageSrc
   const imageSrc = useCallback(
     (handle: string): string =>
-      `${endpoint}${endpoint.includes('?') ? '&' : '?'}image=${encodeURIComponent(handle)}`,
-    [endpoint],
+      resolve
+        ? resolve(handle)
+        : `${endpoint}${endpoint.includes('?') ? '&' : '?'}image=${encodeURIComponent(handle)}`,
+    [endpoint, resolve],
   )
 
   const interrupt = useCallback((): void => {
@@ -173,6 +176,20 @@ export type AgentSessionOptions = {
   mode?: ClaudeMode
   /** What the composer's effort chip starts at. */
   effort?: ClaudeEffort
+  /**
+   * Where a held picture can be asked for, when it is not the handler holding
+   * it. The third transport seam, beside `createEventSource` and `fetch`, and
+   * there for the same reason: an image fetch is transport, and replay is a
+   * whole surface running with no network behind it.
+   *
+   * It changes who holds the bytes and nothing else. A Message still names a
+   * handle and only a handle; whoever resolves one is still expected to do it
+   * by lookup, so a handle they never held gets nothing back.
+   *
+   * The default composes a query parameter against `endpoint`, which is what
+   * the handler serves.
+   */
+  imageSrc?: (handle: string) => string
 }
 
 /** As much of `fetch` as the hook uses. The browser's own satisfies it. */
