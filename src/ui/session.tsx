@@ -254,8 +254,12 @@ function Outcome({ message }: { message: OutcomeMessage }) {
  *
  * `data-divergence` is the machine-readable half, so a marker can be found and
  * told apart without reading prose — the same contract `data-outcome` carries
- * for how a Turn ended.
+ * for how a Turn ended. Being what everything downstream keys off, it is typed
+ * rather than left open: a mistyped kind is a compile error here, not a
+ * selector that silently matches nothing wherever someone later looks for it.
  */
+type Divergence = Extract<Message['kind'], 'compacted' | 'reset' | 'recall' | 'hook'>
+
 function Marker({
   kind,
   glyph,
@@ -264,7 +268,12 @@ function Marker({
   tone = 'var(--cc-fg-muted)',
   status,
 }: {
-  kind: string
+  /**
+   * Drawn from the Message vocabulary through `Extract`, so a kind renamed
+   * there stops compiling here rather than quietly becoming an attribute
+   * nothing matches.
+   */
+  kind: Divergence
   glyph: string
   label: string
   /** Whatever the runtime actually gave. Anything missing is simply absent. */
