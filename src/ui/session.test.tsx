@@ -664,6 +664,35 @@ test('deliberation is off the screen by default, and on it only when asked for',
   asked.unmount()
 })
 
+test('the reading on the working line is the one the recorded stream reported', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  // The golden log up to its own context reading, which lands while the Turn
+  // is still running. Driven from the recording rather than from numbers
+  // invented here: a working line wired to a shape nobody ever sends is wired
+  // to nothing, and every synthetic Frame above this shares that risk.
+  const upToReading = golden.slice(0, golden.findIndex((frame) => frame.kind === 'context') + 1)
+  expect(upToReading.some((frame) => frame.kind === 'settled' || frame.kind === 'failed')).toBe(
+    false,
+  )
+
+  await act(async () => {
+    for (const frame of upToReading) fake.frame(frame)
+  })
+
+  const reading = upToReading.at(-1)
+  expect(reading?.kind).toBe('context')
+  // The recorded figure, read off the fixture rather than restated — restating
+  // it here would make the test agree with itself when the fixture is
+  // regenerated and the wiring has quietly stopped passing it through.
+  expect(working()).toContain(
+    reading?.kind === 'context' ? reading.totalTokens.toLocaleString('en-US') : 'no reading',
+  )
+
+  view.unmount()
+})
+
 test('a rate limit is never read as a context reading', async () => {
   const fake = fakeSse()
   const view = await mount(fake)
