@@ -146,3 +146,12 @@ loop — is how you end up unable to test either.
 - **Bun-first.** All three prior implementations are Bun. The handler is written
   against Web-standard `Request`/`Response` so it is not *hostile* to other
   runtimes, but Bun.serve and Hono are what get tested.
+- **Ship the build, not the sources.** Bun-first is how it is developed, not
+  what it may demand of a consumer. `dist/` carries compiled JavaScript and
+  declarations, emitted by `prepack`. Publishing `src/` was tried and works
+  under Bun — and hands every consumer running `tsc` twenty `TS5097` errors
+  inside their own `node_modules`, for files they cannot edit, unless they
+  adopt `allowImportingTsExtensions`. A published package has no business
+  setting compiler options for the projects that install it. Verified by
+  packing, installing into a project elsewhere on disk, and importing it back:
+  `src/package.test.ts`.
