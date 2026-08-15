@@ -206,6 +206,112 @@ test('an interrupted Turn reads as an ending, not as an error', async () => {
   view.unmount()
 })
 
+test('a compaction says memory became a summary, and what that cost', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'text', text: 'Reading the suite.' })
+    fake.frame({
+      kind: 'compacted',
+      trigger: 'auto',
+      preTokens: 180000,
+      postTokens: 42000,
+      durationMs: 3100,
+    })
+  })
+
+  const said = divergence('compacted')
+  // The counts are the whole of the claim. A boundary drawn without them says
+  // a compaction happened and hides how much of the conversation the agent
+  // can no longer see — which is the silence this marker exists to break.
+  expect(said).toContain('180,000')
+  expect(said).toContain('42,000')
+  // And which kind of compaction: one the person asked for and one the window
+  // forced are different facts about the Session.
+  expect(said).toContain('auto')
+  view.unmount()
+})
+
+test('a compaction the runtime gave no counts for does not invent any', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'compacted' })
+  })
+
+  // Still drawn — the boundary happened, and that alone changes what the agent
+  // can see. But a plausible-looking zero would be the screen making up a
+  // number the SDK never gave.
+  const said = divergence('compacted')
+  expect(said).not.toBe('')
+  expect(said).not.toContain('0')
+  expect(said).not.toContain('undefined')
+  expect(said).not.toContain('NaN')
+  view.unmount()
+})
+
+test('a reset is not drawn like a compaction — memory gone is not memory summarised', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'compacted', trigger: 'auto', preTokens: 180000, postTokens: 42000 })
+    fake.frame({ kind: 'reset', transcriptId: 'conv-2' })
+  })
+
+  const summarised = divergence('compacted')
+  const cleared = divergence('reset')
+
+  // The harder loss must not borrow the softer one's words. Drawn the same,
+  // the screen would tell a viewer their conversation was condensed when it
+  // was actually thrown away.
+  expect(cleared).not.toBe(summarised)
+  expect(cleared).not.toContain('summary')
+  expect(cleared).not.toContain('compact')
+  expect(cleared).toContain('cleared')
+  // And told apart without reading a word of it.
+  expect(colour('reset')).not.toBe(colour('compacted'))
+  // The id the fresh Transcript is mounted under: the one fact a reset
+  // carries, and the handle for the conversation that replaced this one.
+  expect(cleared).toContain('conv-2')
+  view.unmount()
+})
+
+test('a recall says what surfaced; one that surfaced nothing is correctly silent', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({
+      kind: 'recall',
+      mode: 'select',
+      memories: [{ path: '/memories/ports.md', scope: 'personal', content: 'Prefers Bun.' }],
+    })
+    // Nothing was surfaced, so nothing entered the agent's context and there
+    // is no divergence to report.
+    fake.frame({ kind: 'recall', mode: 'select', memories: [] })
+  })
+
+  // Exactly one. Two would be an empty recall claiming context arrived that
+  // never did; zero would be the marker missing altogether — and "an empty
+  // recall renders nothing" on its own cannot tell that apart from working,
+  // which is why both recalls are driven through the same screen.
+  expect(divergences('recall')).toBe(1)
+  const said = divergence('recall')
+  // Where it came from, because the whole point of the marker is that this
+  // text was never said in this conversation.
+  expect(said).toContain('/memories/ports.md')
+  expect(said).toContain('personal')
+
+  // And the empty one leaves no row behind either: a blank entry in the log is
+  // still the screen taking up space for something it will not explain.
+  const rows = [...screen.getByRole('log').children].map((row) => (row.textContent ?? '').trim())
+  expect(rows).toEqual([said])
+  view.unmount()
+})
+
 test('Enter wills a prompt Event and empties the composer', async () => {
   const fake = fakeSse()
   const wire = recorder()
@@ -379,6 +485,30 @@ function entry(at: number): HTMLElement {
   const found = document.querySelectorAll<HTMLElement>('[data-outcome]')[at]
   if (!found) throw new Error(`no ending entry at ${at}`)
   return found
+}
+
+/**
+ * What the divergence marker of a given kind says. Exactly one is expected:
+ * two would mean the same divergence drawn twice, and none would mean the
+ * marker is missing — which is the failure mode these markers exist to stop,
+ * so it must be an error rather than an empty string that reads as "silent".
+ */
+function divergence(kind: string): string {
+  const found = document.querySelectorAll<HTMLElement>(`[data-divergence="${kind}"]`)
+  if (found.length !== 1) throw new Error(`expected 1 ${kind} marker, found ${found.length}`)
+  return (found[0]?.textContent ?? '').trim()
+}
+
+/** What colour a marker is drawn in — how it is told apart without reading. */
+function colour(kind: string): string {
+  const found = document.querySelector<HTMLElement>(`[data-divergence="${kind}"]`)
+  if (!found) throw new Error(`no ${kind} marker`)
+  return found.style.color
+}
+
+/** How many divergence markers of a kind are on screen. */
+function divergences(kind: string): number {
+  return document.querySelectorAll(`[data-divergence="${kind}"]`).length
 }
 
 /** What a tool's collapsed line shows, minus what only a reader would hear. */
