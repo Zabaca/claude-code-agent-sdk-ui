@@ -6,7 +6,7 @@ import type { ClaudeEffort, ClaudeMode } from '../core/composer.ts'
 import type { AgentEvent, PromptEvent, PromptImage } from '../core/event.ts'
 import type { Frame } from '../core/frame.ts'
 import { blockAt, isPartialKind, type PartialKind, type PartialText } from '../core/partial.ts'
-import { reduce } from '../core/reduce.ts'
+import { reduce, type Pending } from '../core/reduce.ts'
 import type { Transcript } from '../core/transcript.ts'
 
 /**
@@ -30,7 +30,7 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   const reasoning = options.reasoning === true
 
   const create = useLatest(options.createEventSource ?? browserEventSource)
-  const post = useLatest(options.fetch ?? globalThis.fetch)
+  const post = useLatest(options.fetch ?? browserFetch)
 
   useEffect(() => {
     const source = create.current(endpoint)
@@ -107,15 +107,8 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     })
   }, [will])
 
-  // One producer. Everything on screen — retained, still being written, or not
-  // yet acknowledged — is placed by the module whose job placing is, so the
-  // Transcript the hook hands out has the same index-stability the golden test
-  // holds `reduce` to. Assembling the tail here instead is what used to move
-  // the agent's words out from under their own React key whenever a Thread
-  // streamed beside them.
   const transcript = useMemo(
-    (): Transcript =>
-      reduce(present(state.frames), { reasoning, live: state.live, sent: state.sent }),
+    (): Transcript => transcriptOf(state, reasoning),
     [state.frames, state.live, state.sent, reasoning],
   )
 
@@ -180,6 +173,20 @@ export type AgentSessionOptions = {
 }
 
 /** As much of `fetch` as the hook uses. The browser's own satisfies it. */
+/**
+ * The browser's own `fetch`, called on the window.
+ *
+ * Not `globalThis.fetch` itself: it is a native method, it is held in a ref and
+ * called as `post.current(...)`, and that makes its `this` the ref rather than
+ * the window — which Chrome refuses with "Failed to execute 'fetch' on
+ * 'Window': Illegal invocation". Wrapped rather than bound so there is one
+ * reference for the life of the module and nothing to rebind per render.
+ *
+ * Only live mode ever reaches it. Replay supplies its own `fetch`, and so does
+ * every test, which is how this survived to be found in a browser.
+ */
+const browserFetch: AgentFetch = (endpoint, init) => globalThis.fetch(endpoint, init)
+
 export type AgentFetch = (
   endpoint: string,
   init: { method: string; headers: Record<string, string>; body: string },
@@ -250,7 +257,42 @@ export type AgentEventSourceFactory = (endpoint: string) => AgentEventSource
 
 // --- what has arrived -----------------------------------------------------------
 
-type SessionState = {
+/**
+ * The hook's own reducer and the view over it, reachable without React so the
+ * invariant joining them can be asserted directly. Not exported from the
+ * package's `react` entry point: this is a seam for the property test that
+ * holds `step` and `reduce` to agreeing, the way `image.ts` and `wire.ts` are
+ * reachable inside the package and are not part of `core`'s surface.
+ *
+ * One producer. Everything on screen — retained, still being written, or not
+ * yet acknowledged — is placed by the module whose job placing is, so the
+ * Transcript the hook hands out has the same index-stability the golden test
+ * holds `reduce` to. Assembling the tail in the component instead is what used
+ * to move the agent's words out from under their own React key whenever a
+ * Thread streamed beside them.
+ */
+export function transcriptOf(state: SessionState, reasoning: boolean): Transcript {
+  // Both kinds of unretained thing, in the order they happened. A person typing
+  // while the agent writes and an agent answering something just sent are the
+  // same situation from opposite ends: the only thing that orders them is which
+  // came first, which is what the mark on each records.
+  const pending: (Pending & { seq: number })[] = [
+    ...state.live.map((block) => ({
+      ...compact<Pending>({ kind: block.kind, text: block.text, thread: block.thread, after: block.after }),
+      seq: block.opened,
+    })),
+    ...state.sent.map((one) => ({
+      kind: 'prompt' as const,
+      text: one.text,
+      after: one.after,
+      seq: one.at,
+    })),
+  ].sort((a, b) => a.seq - b.seq)
+
+  return reduce(present(state.frames), { reasoning, pending })
+}
+
+export type SessionState = {
   /**
    * Index-addressed, because a Frame's `id:` is its index in the handler's log.
    * Placing rather than pushing is what makes a redelivered Frame idempotent.
@@ -275,28 +317,31 @@ type Live = {
   text: string
   thread?: string
   /**
-   * How many Messages stood ahead of the block when it opened — where it
-   * belongs in the order. Stamped once, when the block is first seen, so a
-   * block keeps the place it started at however much arrives around it.
+   * How many Frames had been retained when the block opened — where it belongs
+   * in the order. Stamped once and moved only when a block ahead of it settles
+   * into a Frame, so a block keeps the place it started at however much
+   * arrives around it.
    */
   after: number
+  /** When it opened, against everything else waiting on the log. */
+  opened: number
 }
 
 /** A person's words, shown before the handler has retained them. */
-type Sent = { at: number; text: string }
+type Sent = { at: number; text: string; after: number }
 
-type Arrival =
+export type Arrival =
   | { type: 'frame'; index: number; body: string }
   | { type: 'partial'; body: string }
   | { type: 'sent'; at: number; text: string }
   | { type: 'unsent'; at: number; why: string }
   | { type: 'broke'; why: string }
 
-function initial(): SessionState {
+export function initial(): SessionState {
   return { frames: [], live: [], sent: [] }
 }
 
-function step(state: SessionState, arrival: Arrival): SessionState {
+export function step(state: SessionState, arrival: Arrival): SessionState {
   switch (arrival.type) {
     case 'frame': {
       const frame = parse<Frame>(arrival.body)
@@ -312,7 +357,12 @@ function step(state: SessionState, arrival: Arrival): SessionState {
       frames[arrival.index] = frame
       if (known) return { ...state, frames }
 
-      return { ...state, frames, live: retire(state.live, frame), sent: settle(state.sent, frame) }
+      return {
+        ...state,
+        frames,
+        live: retire(state.live, frame, arrival.index),
+        sent: settle(state.sent, frame),
+      }
     }
     case 'partial': {
       const partial = parse<PartialText>(arrival.body)
@@ -329,14 +379,12 @@ function step(state: SessionState, arrival: Arrival): SessionState {
         // Kept from when the block opened, never restamped: a delta arriving
         // after a Thread's Frame landed must not move the block it grows.
         //
-        // Blocks already open count as well as Frames already retained. A
-        // block that opened second is behind the first block's eventual Frame,
-        // not ahead of it — counting only the log would put the two in the
-        // order they *finished*, which is the thing being fixed. Counted over
-        // what is present rather than over the array's length, because a Frame
-        // arriving out of order leaves a hole and `reduce` walks the log
-        // without one.
-        after: state.live[held]?.after ?? present(state.frames).length + state.live.length,
+        // Counted over what is present rather than over the array's length,
+        // because a Frame arriving out of order leaves a hole and `reduce`
+        // walks the log without one. Blocks opened at the same count keep
+        // their relative order, which is the order they are held in.
+        after: state.live[held]?.after ?? present(state.frames).length,
+        opened: state.live[held]?.opened ?? mark(),
       })
       if (held === -1) return { ...state, live: [...state.live, block] }
       const live = state.live.slice()
@@ -347,7 +395,10 @@ function step(state: SessionState, arrival: Arrival): SessionState {
       // The last refusal stops being worth reporting the moment fresh words are
       // on their way, so it is dropped rather than left standing.
       const { error, ...rest } = state
-      return { ...rest, sent: [...state.sent, { at: arrival.at, text: arrival.text }] }
+      return {
+        ...rest,
+        sent: [...state.sent, { at: arrival.at, text: arrival.text, after: present(state.frames).length }],
+      }
     }
     case 'unsent':
       return {
@@ -375,13 +426,21 @@ function step(state: SessionState, arrival: Arrival): SessionState {
  * Frame for a block the runtime never completed, so a reload would not show it
  * either; what is on screen follows the log rather than outliving it.
  */
-function retire(live: Live[], frame: Frame): Live[] {
+function retire(live: Live[], frame: Frame, index: number): Live[] {
   if (live.length === 0) return live
   if (frame.kind === 'settled' || frame.kind === 'failed') return []
   if (frame.kind !== 'text' && frame.kind !== 'reasoning') return live
   const at = live.findIndex((one) => one.kind === frame.kind && one.thread === frame.thread)
   if (at === -1) return live
-  return [...live.slice(0, at), ...live.slice(at + 1)]
+  // The Frame takes the settled block's place, and that place was ahead of
+  // every block opened after it — so those move past the Frame rather than
+  // staying where a block that is no longer live used to be. Only blocks
+  // behind the settled one move, and only far enough to clear it: a Frame that
+  // settles nothing, which is most of them, moves nothing at all.
+  return [
+    ...live.slice(0, at),
+    ...live.slice(at + 1).map((one) => ({ ...one, after: Math.max(one.after, index + 1) })),
+  ]
 }
 
 /**
@@ -420,9 +479,17 @@ function modeOf(permissionMode: string | undefined): ClaudeMode | undefined {
   }
 }
 
-/** Tells one optimistic Message from another, including two of the same words. */
+/**
+ * Tells one optimistic Message from another, including two of the same words.
+ *
+ * The one clock both kinds of unretained thing are stamped against — a person's
+ * words when they are willed, a block when it opens — which is the only thing
+ * that orders them against each other. Reachable inside the package for the
+ * same reason `step` is: a test that stamped its own would be ordering against
+ * a clock the reducer never reads.
+ */
 let marks = 0
-function mark(): number {
+export function mark(): number {
   marks += 1
   return marks
 }

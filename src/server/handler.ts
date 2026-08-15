@@ -316,6 +316,25 @@ class AgentSession {
             // of thing an API rejects the whole request over.
             ...(text.trim() === '' ? [] : [{ type: 'text' as const, text }]),
           ]
+
+    // Retained here, because the runtime never says it back.
+    //
+    // A prompt pushed into the SDK's input stream does not come out of its
+    // output stream: the only `user` messages it emits carry tool results, so
+    // `classify` never makes a prompt Frame and the log ends up holding the
+    // answers with the questions missing. The browser's optimistic Message
+    // covered it on screen and nowhere else — it is React state, so a reload
+    // or a resume on another machine came back to half a conversation.
+    //
+    // The pictures go ahead of the words here too, matching what is pushed to
+    // the SDK. Handed over with their payload and minted by `#append`, which is
+    // where the handle rule is enforced for every image whichever direction it
+    // came from — a Message names a handle and only a handle.
+    for (const image of images) {
+      this.#append({ kind: 'image', mediaType: image.mediaType, data: image.data })
+    }
+    this.#append({ kind: 'prompt', text })
+
     input.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null })
   }
 

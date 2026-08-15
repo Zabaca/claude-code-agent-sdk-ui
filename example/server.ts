@@ -9,8 +9,11 @@ import index from './index.html'
  * imported lazily inside it, so a run that only ever uses replay never reaches
  * for a credential.
  *
- * Bound to localhost, because that is the whole threat model (ADR-0001): a
- * single trusted user on their own machine. Do not put this behind a domain.
+ * Bound to localhost, and it stays that way. `bun run tailnet` puts it on the
+ * tailnet by pointing tailscaled at this port (ADR-0004) — the process never
+ * listens on anything but `127.0.0.1`, so nothing here decides who can reach
+ * it. Do not put it behind a domain: ADR-0004 is a tailnet, which is a
+ * membership list, and Funnel is one flag away from being neither.
  */
 const root = new URL('../', import.meta.url).pathname
 const stylesheet = `${root}dist/styles.css`

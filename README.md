@@ -83,6 +83,28 @@ They are one code path: the same `useAgentSession`, the same `reduce`, the same
 components. Only where the Frames come from differs — which is why replay
 proves something about live.
 
+### Reaching it from another machine
+
+```sh
+bun run tailnet      # once — declares and serves the route
+bun run dev
+```
+
+`tailscale serve` points tailscaled at port 5173; the process keeps its
+`127.0.0.1` bind. The playground is then at
+`https://<node>.<tailnet>.ts.net:8805` for everything on your tailnet.
+
+> **This shares more than a UI.** `/agent` runs the Agent SDK with
+> `permissionMode: 'bypassPermissions'` and `cwd` set to the checkout, so every
+> device on the tailnet can run commands as you, without being asked. The
+> tailnet is the whole boundary — read
+> [ADR-0004](./docs/adr/0004-the-tailnet-is-the-playground-boundary.md) before
+> running it, and `tailscale serve --https=8805 off` to stop.
+>
+> This is the playground, not the package. `createAgentHandler` is unchanged and
+> [ADR-0001](./docs/adr/0001-localhost-single-user-threat-model.md) still governs
+> it.
+
 > **If an edit does not show up, restart `bun run dev`.** The dev server
 > rebundles on change and the stylesheet is rebuilt whenever a component is
 > newer than it — but a long-lived `--hot` process can lose track of a file that
@@ -134,7 +156,7 @@ shipped stylesheet.
 ## Tests
 
 ```sh
-bun test src         # the whole suite. No credential, no network, no tokens.
+bun test src scripts # the whole suite. No credential, no network, no tokens.
 bun run typecheck
 ```
 

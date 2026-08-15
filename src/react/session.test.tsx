@@ -164,11 +164,46 @@ test('a prompt nobody at the keyboard wrote settles nothing of theirs', async ()
     fake.frame({ kind: 'prompt', text: 'carry on', origin: { kind: 'discord', from: 'someone' } })
   })
 
+  // Four Messages, and in the order they happened: the person's two words went
+  // first and stay first. They used to be pushed below both Frames, because
+  // anything unretained was treated as newer than everything retained — which
+  // is the same rule that put an agent's answer above the question.
   expect(session.current.transcript.messages).toEqual([
+    { kind: 'prompt', text: 'carry on' },
+    { kind: 'prompt', text: 'carry on' },
     { kind: 'prompt', text: 'carry on', synthetic: true },
     { kind: 'prompt', text: 'carry on', origin: { kind: 'discord', from: 'someone' } },
-    { kind: 'prompt', text: 'carry on' },
-    { kind: 'prompt', text: 'carry on' },
+  ])
+})
+
+test('a Turn that ends stops the working line, even if nothing settled the words', async () => {
+  // The second half of the same bug. `sent` forcing a working Turn is what puts
+  // the working line up before the runtime has said anything — but it was
+  // applied last, so it also overrode a Turn the runtime had said was over.
+  // A prompt Frame that never matches leaves the words in flight forever, and
+  // the screen said "thinking" after the answer had arrived and finished.
+  //
+  // Reachable in live mode and nowhere else: replay retains the person's words
+  // verbatim, so the optimistic Message always settles there.
+  const fake = fakeSse()
+  const wire = recorder()
+  const session = await mount(fake, { fetch: wire.fetch })
+
+  await act(async () => session.current.send('hi'))
+  expect(session.current.transcript.turn).toEqual({ status: 'working' })
+
+  await act(async () => {
+    fake.frame({ kind: 'text', text: 'Hello there.' })
+    fake.frame({ kind: 'settled', result: 'Hello there.' })
+  })
+
+  // The runtime says the Turn is over, so it is over.
+  expect(session.current.transcript.turn).toEqual({ status: 'idle' })
+  // And the words are still on screen, above the answer to them.
+  expect(session.current.transcript.messages).toEqual([
+    { kind: 'prompt', text: 'hi' },
+    { kind: 'text', text: 'Hello there.' },
+    { kind: 'outcome', outcome: 'settled', result: 'Hello there.' },
   ])
 })
 
@@ -450,6 +485,30 @@ test("a Thread's live text is its own, not the agent's", async () => {
     { kind: 'text', text: 'Main says' },
     { kind: 'text', text: 'Sub says.', thread: 'call-1' },
   ])
+})
+
+test('a Frame that settles no block moves none of them', async () => {
+  // Two blocks open at once, and something retained that is nothing to do with
+  // either — a hook firing, a meter reading, a tool call. The block that opened
+  // second used to be pushed along behind it, because where a block sits was
+  // counted partly in Frames and partly in blocks, and only the Frame half grew.
+  const fake = fakeSse()
+  const session = await mount(fake)
+
+  await act(async () => {
+    fake.partial({ block: 0, kind: 'text', text: 'Main says' })
+    fake.partial({ block: 0, kind: 'text', text: 'Sub says', thread: 'call-1' })
+  })
+
+  const before = session.current.transcript.messages
+
+  await act(async () =>
+    fake.frame({ kind: 'hook', name: 'block-secrets', status: 'success' }),
+  )
+
+  // The hook lands after both, and neither block has moved.
+  expect(session.current.transcript.messages.slice(0, 2)).toEqual(before)
+  expect(session.current.transcript.messages.at(-1)).toMatchObject({ kind: 'hook' })
 })
 
 test('a live block keeps its place while the log grows around it', async () => {
@@ -773,6 +832,43 @@ const endpoint = 'http://localhost/agent'
 type Mounted = { readonly current: AgentSession; unmount(): void }
 
 /** Renders the hook against the fake transport and lets the first replay land. */
+test('the default transport calls the browser\'s own fetch, not a detached copy', async () => {
+  // Every other test here injects a `fetch`, so the default had never been
+  // called — and the browser\'s `fetch` is a native method that refuses to run
+  // unless it is called on the window. Held in a ref and called as
+  // `post.current(...)`, its `this` is the ref, and Chrome answers
+  // "Failed to execute \'fetch\' on \'Window\': Illegal invocation".
+  //
+  // Reachable only in live mode: replay supplies its own `fetch`, so the
+  // playground exercised everything except the path a real Session takes.
+  const original = globalThis.fetch
+  const called: string[] = []
+  const strict = function (this: unknown, url: unknown): Promise<Response> {
+    // What the browser does, which no test double had modelled.
+    if (this !== globalThis && this !== undefined) {
+      throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation")
+    }
+    called.push(String(url))
+    return Promise.resolve(new Response(null, { status: 202 }))
+  }
+  globalThis.fetch = strict as typeof globalThis.fetch
+
+  try {
+    const fake = fakeSse()
+    const session = await mount(fake)
+
+    await act(async () => session.current.send('hello'))
+
+    expect(called).toEqual([endpoint])
+    expect(session.current.error).toBeUndefined()
+    // And the words are still on screen rather than taken back as refused.
+    expect(session.current.transcript.messages).toEqual([{ kind: 'prompt', text: 'hello' }])
+    session.unmount()
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
 async function mount(fake: FakeSse, options: Partial<AgentSessionOptions> = {}): Promise<Mounted> {
   const view = renderHook(() =>
     useAgentSession({ endpoint, createEventSource: fake.createEventSource, ...options }),

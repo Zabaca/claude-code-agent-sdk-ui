@@ -24,7 +24,9 @@ import { ClaudePrompt } from './claude-prompt.tsx'
 import { ClaudeThinking } from './claude-thinking.tsx'
 import { ClaudeTodoList } from './claude-todo-list.tsx'
 import { ClaudeToolCall } from './claude-tool-call.tsx'
+import { useFollowing } from './following.ts'
 import { cn } from './lib/cn.ts'
+import { Markdown } from './markdown.tsx'
 import {
   arrange,
   hueOf,
@@ -90,6 +92,9 @@ export function ClaudeSession({
   const working = transcript.turn.status === 'working'
   const opened = useThreads(transcript, clock)
   const byThread = new Map(opened.map((thread) => [thread.thread, thread]))
+  // Follows the tail while the agent writes, and stops the moment the reader
+  // scrolls away from it. Keyed on the Transcript, which changes per token.
+  const tail = useFollowing(transcript)
 
   // What the runtime advertises, narrowed to what has been typed. Derived every
   // render rather than held, so a `commands` Frame arriving mid-Session — a
@@ -125,13 +130,37 @@ export function ClaudeSession({
     >
       {header}
 
-      <div role="log" className="cc:flex cc:min-w-0 cc:flex-col cc:gap-2">
+      <div ref={tail.log} role="log" className="cc:flex cc:min-w-0 cc:flex-col cc:gap-2">
         {arrange(transcript.messages, threads).map((entry) => (
           // The Transcript is append-and-patch-the-tail, so a Message's index
           // is stable for as long as it is on screen.
           <Entry key={entry.at} entry={entry} threads={byThread} src={session.imageSrc} />
         ))}
       </div>
+
+      {/* The way back, and only while it is needed — a control that is always
+          there is a control nobody reads, whereas this one appearing *is* the
+          message that the agent has written past where you are reading.
+
+          A sibling of the Transcript rather than a child of it: `role="log"` is
+          a live region, so chrome inside it would be read out as though the
+          agent had said it. Sticky rather than placed, so it holds against
+          whichever element turns out to be the scroller. */}
+      {tail.following ? null : (
+        <button
+          type="button"
+          data-jump
+          onClick={tail.jumpToBottom}
+          className="cc:sticky cc:bottom-2 cc:z-10 cc:self-center cc:rounded-full cc:border cc:px-3 cc:py-1 cc:text-[11px]"
+          style={{
+            borderColor: 'var(--cc-rule)',
+            background: 'var(--cc-user-bg)',
+            color: 'var(--cc-fg-dim)',
+          }}
+        >
+          ↓ newest
+        </button>
+      )}
 
       {/* One meter per Thread, outside the Transcript on purpose: a background
           agent's progress is a fact about now, not an entry in the order, and
@@ -251,6 +280,9 @@ export function ClaudeSession({
               value,
               pasted.map((one) => one.image),
             )
+            // Sending is a reason to follow again: the answer to what was just
+            // asked is the thing worth being taken to, even after reading back.
+            tail.resume()
             // The pictures go with the words. Left behind they would be sent
             // again with the next Turn, which is the composer showing one
             // thing and the wire carrying another.
@@ -271,6 +303,13 @@ export function ClaudeSession({
           // a control that lies. It stays unset until such an Event exists.
         />
       </div>
+
+      {/* The end of everything, watched rather than measured — empty, and
+          aria-hidden, because it is a position and not something anyone reads.
+          After the composer rather than after the Transcript: following brings
+          this into view, and a marker above the composer would scroll the
+          composer off the bottom of the screen to do it. */}
+      <div ref={tail.sentinel} aria-hidden className="cc:h-px cc:shrink-0" />
     </div>
   )
 }
@@ -558,7 +597,14 @@ function draw(message: Message, src: (handle: string) => string): React.ReactNod
     case 'prompt':
       return <ClaudeMessage role="user">{message.text}</ClaudeMessage>
     case 'text':
-      return <ClaudeMessage role="assistant">{message.text}</ClaudeMessage>
+      // The agent writes Markdown; the person writes what they typed. Only one
+      // of the two is drawn as markup, and it is not the one whose asterisks
+      // might have been meant.
+      return (
+        <ClaudeMessage role="assistant">
+          <Markdown text={message.text} />
+        </ClaudeMessage>
+      )
     case 'reasoning':
       // Only ever present when the hook was asked for it: thinking is not an
       // answer, so it is out of the Transcript by default.

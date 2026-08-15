@@ -1662,7 +1662,29 @@ const endpoint = 'http://localhost/agent'
 /** The committed 37-Frame log — every Frame kind `classify` can emit. */
 const golden = goldenLog as Frame[]
 
-/** Renders the container over the hook and lets the first replay land. */
+test("the agent's answer is drawn as the Markdown it is written in", async () => {
+  // Reached through the container, so the wiring is covered as well as the
+  // renderer: a perfect renderer nothing calls draws nothing. Claude Code
+  // answers in Markdown constantly, and all of it used to arrive as one run of
+  // literal text with the asterisks and backticks still in it.
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () =>
+    fake.frame({ kind: 'text', text: '## What I did\n\n- ran `bun test`\n- **it passed**' }),
+  )
+
+  expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('What I did')
+  expect(document.querySelectorAll('li').length).toBe(2)
+  expect(document.querySelector('code')?.textContent).toBe('bun test')
+  expect(document.querySelector('strong')?.textContent).toBe('it passed')
+
+  // The person's own words are not Markdown — they are what they typed.
+  await act(async () => fake.frame({ kind: 'prompt', text: 'why is **this** broken' }))
+  expect(screen.getByText('why is **this** broken')).toBeDefined()
+  view.unmount()
+})
+
 async function mount(
   fake: FakeSse,
   options: Partial<AgentSessionOptions> = {},
