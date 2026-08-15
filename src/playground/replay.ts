@@ -179,6 +179,13 @@ export function tool(call: {
   name: string
   input: Record<string, unknown>
   output: string
+  /**
+   * The tool's full Output object, where the SDK puts it. This is what a diff
+   * is drawn from, so a scripted `Edit` that omits it demos the collapsed line
+   * rather than the change — which is exactly what a replay log is for
+   * catching.
+   */
+  structured?: unknown
   failed?: boolean
   takes?: number
   /** The Thread that ran it; absent for the agent's own work. */
@@ -202,10 +209,101 @@ export function tool(call: {
         id: call.id,
         output: call.output,
         isError: call.failed === true,
+        structured: call.structured,
         thread: call.thread,
       }),
     },
   ]
+}
+
+/**
+ * The agent's plan, as `TodoWrite` states it. Written out as the SDK's own
+ * shape rather than as the component's props, because the point of scripting
+ * it here is that the mapping runs — a log holding `ClaudeTodoList` props
+ * would demo the component and prove nothing about the wire.
+ */
+export function todos(
+  id: string,
+  plan: { content: string; status: 'pending' | 'in_progress' | 'completed' }[],
+): Beat[] {
+  const listed = plan.map((item) => ({ ...item, activeForm: item.content }))
+  return tool({
+    id,
+    name: 'TodoWrite',
+    input: { todos: listed },
+    output: 'Todos have been modified successfully',
+    structured: { oldTodos: [], newTodos: listed },
+    takes: 200,
+  })
+}
+
+/**
+ * What the agent's edit did to the test, as `FileEditOutput` carries it: two
+ * hunks, so the playground shows the gap between them, and `originalFile`
+ * present, so it reads as an update rather than a creation.
+ */
+const PINNED = {
+  filePath: '/repo/src/core/reduce.test.ts',
+  originalFile: [
+    "import { test, expect } from 'bun:test'", // 1
+    '', // 2
+    "import { reduce } from './reduce.ts'", // 3
+    '', // 4
+    "test('reduce appends in order', () => {", // 5
+    '  expect(reduce([]).messages).toEqual([])', // 6
+    '})', // 7
+    '', // 8
+    "test('reduce keeps order', () => {", // 9
+    "  const frames = JSON.parse(execSync('bun run record').toString())", // 10
+    '  const transcript = reduce(frames)', // 11
+    '  expect(transcript.messages.length).toBe(3)', // 12
+    '})', // 13
+  ].join('\n'),
+  structuredPatch: [
+    {
+      oldStart: 1,
+      oldLines: 2,
+      newStart: 1,
+      newLines: 3,
+      lines: [
+        " import { test, expect } from 'bun:test'",
+        "+import fixture from './fixtures/frames.json' with { type: 'json' }",
+        ' ',
+      ],
+    },
+    // Six lines below the first hunk, which is what puts a real gap between
+    // them rather than a mark standing over nothing.
+    {
+      oldStart: 9,
+      oldLines: 5,
+      newStart: 10,
+      newLines: 4,
+      lines: [
+        " test('reduce keeps order', () => {",
+        "-  const frames = JSON.parse(execSync('bun run record').toString())",
+        '-  const transcript = reduce(frames)',
+        '+  const transcript = reduce(fixture)',
+        '   expect(transcript.messages.length).toBe(3)',
+        ' })',
+      ],
+    },
+  ],
+}
+
+/** The fixture the edit above now imports — a file that was not there before. */
+const WRITTEN = {
+  type: 'create',
+  filePath: '/repo/src/core/fixtures/frames.json',
+  originalFile: null,
+  structuredPatch: [
+    {
+      oldStart: 1,
+      oldLines: 0,
+      newStart: 1,
+      newLines: 3,
+      lines: ['+[', '+  { "kind": "prompt", "text": "hello" }', '+]'],
+    },
+  ],
 }
 
 /**
@@ -393,6 +491,18 @@ export const OPENING: Beat[] = [
   // messages, so it arrives while the Turn is running rather than with the
   // result. This is what the working line counts.
   { frame: { kind: 'context', totalTokens: 24_800, maxTokens: 200_000, percentage: 12.4 } },
+  // The plan, stated before the work it describes. It is restated further down
+  // with two of its three items moved on, because a task *changing* state is
+  // the only thing a todo list is for and the one thing a single list cannot
+  // show.
+  //
+  // It sits after the first block of prose rather than before it so the beat
+  // counts the paced tests above are written against still hold.
+  ...todos('toolu_todo_1', [
+    { content: 'Read the failing test', status: 'in_progress' },
+    { content: 'Reproduce the failure', status: 'pending' },
+    { content: 'Pin the fixture', status: 'pending' },
+  ]),
   ...tool({
     id: 'toolu_read',
     name: 'Read',
@@ -430,11 +540,27 @@ export const OPENING: Beat[] = [
   // one.
   { frame: { kind: 'context', totalTokens: 61_200, maxTokens: 200_000, percentage: 30.6 } },
   ...prose('There it is. The fixture is regenerated per run; pinning it.', { block: 2 }),
+  ...todos('toolu_todo_2', [
+    { content: 'Read the failing test', status: 'completed' },
+    { content: 'Reproduce the failure', status: 'completed' },
+    { content: 'Pin the fixture', status: 'in_progress' },
+  ]),
+  // A file that was not there before, so `originalFile: null` is on screen as
+  // a creation rather than as an edit to something that never existed.
+  ...tool({
+    id: 'toolu_write',
+    name: 'Write',
+    input: { file_path: '/repo/src/core/fixtures/frames.json' },
+    output: 'File created successfully at /repo/src/core/fixtures/frames.json',
+    structured: WRITTEN,
+    takes: 300,
+  }),
   ...tool({
     id: 'toolu_edit',
     name: 'Edit',
     input: { file_path: '/repo/src/core/reduce.test.ts' },
     output: 'Applied 1 edit to /repo/src/core/reduce.test.ts',
+    structured: PINNED,
     takes: 420,
   }),
   ...tool({

@@ -89,11 +89,18 @@ export function diffOf(message: ToolCallMessage): Diff | undefined {
  */
 function linesOf(hunks: Hunk[]): DiffLine[] {
   const out: DiffLine[] = []
+  /** Where the hunk before this one stopped, in the file that now exists. */
+  let ran = 0
 
-  for (const [at, hunk] of hunks.entries()) {
+  for (const hunk of hunks) {
     // The gap between two hunks. Without it a row numbered 5 sits directly
     // above one numbered 42 and the two read as consecutive.
-    if (at > 0) out.push({ type: 'ctx', text: '⋯' })
+    //
+    // Only where lines were actually skipped, though. Two hunks that touch —
+    // which a patch of two nearby edits carries — would otherwise be parted by
+    // a mark claiming a stretch of file that is not there. That reads as
+    // ordinary as any diff, which is what makes it worth guarding.
+    if (hunk.newStart > ran && ran > 0) out.push({ type: 'ctx', text: '⋯' })
 
     let oldAt = hunk.oldStart
     let newAt = hunk.newStart
@@ -121,6 +128,8 @@ function linesOf(hunks: Hunk[]): DiffLine[] {
           newAt += 1
       }
     }
+
+    ran = newAt
   }
 
   return out

@@ -282,12 +282,60 @@ test('the opening log deliberates, and the playground does not show it', async (
   const view = await mount(replay)
   await drain(replay)
 
-  const said = screen.getByRole('log').textContent ?? ''
-  for (const line of thought) expect(said).not.toContain(line)
+  const shown = screen.getByRole('log').textContent ?? ''
+  for (const line of thought) expect(shown).not.toContain(line)
   // And the Turn it was thinking during did reach the screen, so the silence
   // above is deliberation being withheld rather than the script not running.
-  expect(said).toContain('Pinned, and the suite is green.')
+  expect(shown).toContain('Pinned, and the suite is green.')
 
+  view.unmount()
+})
+
+test('the opening log edits a file, and the edit is drawn as the change it made', async () => {
+  const replay = replayTransport({ wait: immediately })
+  const view = await mount(replay)
+  await drain(replay)
+
+  // The same guard, for this ticket's case. A script whose `Edit` answered
+  // with prose alone would demo a collapsed line saying "Applied 1 edit" — the
+  // playground would look untouched by #8 while every test still passed.
+  const edit = document.querySelector('[data-diff="/repo/src/core/reduce.test.ts"]')
+  if (!edit) throw new Error('the opening log draws no diff')
+
+  const said = edit.textContent ?? ''
+  expect(said).toContain('Updated with')
+  // Two hunks, so the gap between them is on screen rather than only tested.
+  // Without it the playground shows one continuous stretch of a file.
+  expect(said).toContain('⋯')
+  expect(said).toContain('reduce(fixture)')
+
+  // And a file that did not exist before, which is the case a reviewer most
+  // needs to see told apart from an edit.
+  const written = document.querySelector('[data-diff="/repo/src/core/fixtures/frames.json"]')
+  expect((written?.textContent ?? '').includes('Created with')).toBe(true)
+  view.unmount()
+})
+
+test("the opening log states a plan, and the plan moves while it runs", async () => {
+  const replay = replayTransport({ wait: immediately })
+  const view = await mount(replay)
+  await drain(replay)
+
+  // Two `TodoWrite` calls, not one. A single list would show three states side
+  // by side and never show a task *changing* state — which is the only thing a
+  // todo list is for, and the thing a static screenshot cannot demonstrate.
+  const lists = [...document.querySelectorAll('[data-todos]')]
+  expect(lists.length).toBeGreaterThan(1)
+
+  const first = lists[0]?.textContent ?? ''
+  const last = lists.at(-1)?.textContent ?? ''
+  expect(first).not.toBe(last)
+
+  // All three states are drawn across the demo, each announced in words.
+  const everything = lists.map((one) => one.textContent ?? '').join(' ')
+  expect(everything).toContain('(completed)')
+  expect(everything).toContain('(in progress)')
+  expect(everything).toContain('(pending)')
   view.unmount()
 })
 

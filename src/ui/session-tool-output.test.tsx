@@ -294,6 +294,48 @@ test('a "no newline at end of file" note does not consume a line number', async 
   view.unmount()
 })
 
+test('hunks that touch are drawn without a gap between them', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({
+      kind: 'tool-call',
+      id: 'toolu_touch',
+      name: 'Edit',
+      input: { file_path: '/repo/src/touch.ts' },
+    })
+    // The first hunk covers new lines 1–2 and the second starts at 3, so
+    // nothing at all was skipped between them.
+    fake.frame({
+      kind: 'tool-result',
+      id: 'toolu_touch',
+      output: 'Applied 2 edits',
+      isError: false,
+      structured: {
+        filePath: '/repo/src/touch.ts',
+        originalFile: 'one\ntwo\nthree\n',
+        structuredPatch: [
+          { oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: [' one', '+two'] },
+          { oldStart: 2, oldLines: 2, newStart: 3, newLines: 2, lines: [' three', '+four'] },
+        ],
+      },
+    })
+  })
+
+  // The gap says "lines were skipped here". Drawn between hunks that touch it
+  // says that about a stretch of file where nothing was skipped — the same
+  // class of quiet wrongness as an off-by-one, and just as unremarkable to
+  // read past.
+  expect(rows('/repo/src/touch.ts')).toEqual([
+    '1| |one',
+    '2|+|two',
+    '3| |three',
+    '4|+|four',
+  ])
+  view.unmount()
+})
+
 // --- the agent's plan ----------------------------------------------------------
 
 const PLAN = [
