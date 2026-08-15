@@ -1663,6 +1663,98 @@ const endpoint = 'http://localhost/agent'
 const golden = goldenLog as Frame[]
 
 /** Renders the container over the hook and lets the first replay land. */
+test('the way back appears only once the reader has scrolled away from the tail', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => fake.frame({ kind: 'text', text: 'Reading the test first.' }))
+
+  // Nothing to go back to: the reader has not moved, so the Transcript is
+  // following and the control would be chrome nobody reads.
+  expect(document.querySelector('[data-jump]')).toBeNull()
+
+  // The page is the scroller here — `ClaudeSession` sets no height, so the
+  // document is what moves. happy-dom computes no layout, so the metrics a
+  // browser would have worked out are stated.
+  const page = document.scrollingElement as HTMLElement
+  where(page, { scrollHeight: 4000, scrollTop: 0, clientHeight: 800 })
+  await act(async () => {
+    page.dispatchEvent(new Event('scroll', { bubbles: false }))
+  })
+
+  const jump = document.querySelector('[data-jump]')
+  expect(jump).not.toBeNull()
+  expect(jump?.textContent).toContain('newest')
+
+  // And it takes the reader back, and starts following again — so the next
+  // Frame moves the screen rather than stacking up out of sight.
+  const scrolled: number[] = []
+  page.scrollTo = watchScroll(scrolled)
+  await act(async () => {
+    ;(jump as HTMLElement).click()
+  })
+
+  expect(scrolled).toEqual([4000])
+  expect(document.querySelector('[data-jump]')).toBeNull()
+  view.unmount()
+})
+
+test('a Frame arriving while the reader is at the tail follows it', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  const page = document.scrollingElement as HTMLElement
+  where(page, { scrollHeight: 4000, scrollTop: 3200, clientHeight: 800 })
+  const scrolled: number[] = []
+  page.scrollTo = watchScroll(scrolled)
+
+  await act(async () => fake.partial({ block: 0, kind: 'text', text: 'Reading the' }))
+  await act(async () => fake.partial({ block: 0, kind: 'text', text: 'Reading the test' }))
+
+  // Per token, not per Message. A growing bubble is the thing worth watching,
+  // and anchoring to the Message count would follow it once and then stop.
+  expect(scrolled).toEqual([4000, 4000])
+  expect(document.querySelector('[data-jump]')).toBeNull()
+  view.unmount()
+})
+
+test('a Frame arriving while the reader is scrolled away does not move them', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  const page = document.scrollingElement as HTMLElement
+  where(page, { scrollHeight: 4000, scrollTop: 0, clientHeight: 800 })
+  await act(async () => {
+    page.dispatchEvent(new Event('scroll', { bubbles: false }))
+  })
+
+  const scrolled: number[] = []
+  page.scrollTo = watchScroll(scrolled)
+
+  await act(async () => fake.frame({ kind: 'text', text: 'more words arriving' }))
+
+  // The words are on screen; the reader is not taken to them. Reading back
+  // through a Turn while the agent is still writing is the case this exists
+  // for, and being yanked forward mid-sentence is the thing it prevents.
+  expect(screen.getByRole('log').textContent).toContain('more words arriving')
+  expect(scrolled).toEqual([])
+  view.unmount()
+})
+
+/** Records where something was scrolled to, in place of a browser doing it. */
+function watchScroll(into: number[]): HTMLElement['scrollTo'] {
+  return ((options?: ScrollToOptions | number) => {
+    if (typeof options === 'object' && typeof options.top === 'number') into.push(options.top)
+  }) as HTMLElement['scrollTo']
+}
+
+/** The layout numbers happy-dom does not compute, stated so a test can use them. */
+function where(node: Element, view: { scrollHeight: number; scrollTop: number; clientHeight: number }): void {
+  Object.defineProperty(node, 'scrollHeight', { value: view.scrollHeight, configurable: true })
+  Object.defineProperty(node, 'clientHeight', { value: view.clientHeight, configurable: true })
+  Object.defineProperty(node, 'scrollTop', { value: view.scrollTop, configurable: true, writable: true })
+}
+
 async function mount(
   fake: FakeSse,
   options: Partial<AgentSessionOptions> = {},
