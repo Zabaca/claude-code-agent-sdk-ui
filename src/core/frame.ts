@@ -17,8 +17,9 @@
  * `SDKMessage` union — `SDKAssistantMessage`, `SDKUserMessage`,
  * `SDKUserMessageReplay` and `SDKPartialAssistantMessage` — plus
  * `SDKToolProgressMessage`. Every Frame born of those carries the Thread:
- * `text`, `reasoning`, `tool-call`, `tool-result`, `image`, `prompt`, and now
- * `context`, which rides on `SDKAssistantMessage` alongside the others.
+ * `text`, `reasoning`, `tool-call`, `tool-result`, `image`, `prompt`,
+ * `tool-progress`, and `context`, which rides on `SDKAssistantMessage`
+ * alongside the others.
  *
  * The rest have no Thread to carry, because the message they come from does
  * not have one to give:
@@ -44,6 +45,7 @@ export type Frame =
   | TextFrame
   | ReasoningFrame
   | ToolCallFrame
+  | ToolProgressFrame
   | ToolResultFrame
   | ImageFrame
   | SettledFrame
@@ -137,6 +139,30 @@ export type ThreadOpened = {
   /** What the Thread is called. */
   description?: string
   subagentType?: string
+}
+
+/**
+ * A call still running, and how long the runtime says it has been.
+ *
+ * The only Frame carrying a duration the runtime measured rather than one this
+ * package inferred. That matters most for a `Task` call, because a `Task` call
+ * *is* a Thread: nothing else on the wire says how long a sub-agent has been
+ * going, so without this a renderer can only time a Thread from the moment it
+ * first saw it — a lower bound, and badly wrong after a reload.
+ */
+export type ToolProgressFrame = {
+  kind: 'tool-progress'
+  /** The `tool_use` id of the call this is about. */
+  id: string
+  name: string
+  /** How long the runtime says it has been running. */
+  elapsedSeconds: number
+  /** The Thread the call belongs to; absent for the agent's own work. */
+  thread?: string
+  /** The kind of agent behind it, which the runtime names on a `Task` call. */
+  subagentType?: string
+  /** The runtime sent this only to say the call is still alive. */
+  heartbeat?: boolean
 }
 
 /** What a tool answered, against the call it answers. */

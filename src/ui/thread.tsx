@@ -129,11 +129,14 @@ export type ThreadReading = {
    */
   contextTokens?: number
   /**
-   * How long this screen has watched it, in milliseconds. Absent for a Thread
-   * whose work was already over the first time it was seen — see the note at
-   * the top of this file.
+   * How long it has been going, in milliseconds. The runtime's own reading
+   * where it sent one; otherwise how long this screen has watched. Absent for
+   * a Thread the runtime has not reported on whose work was already over the
+   * first time it was seen — see the note at the top of this file.
    */
   elapsedMs?: number
+  /** The runtime's reading, kept apart so it can be preferred over the watch. */
+  reportedMs?: number
 }
 
 /**
@@ -168,6 +171,12 @@ export function threadsOf(transcript: ThreadSource): ThreadReading[] {
         subagentType,
         state: stateOf(message),
         toolCalls: 0,
+        // The runtime's own reading, when it has sent one. A `Task` call is
+        // the Thread, so `tool_progress` on it is how long the Thread has
+        // really been going — the only duration on the wire that a clock
+        // measured rather than this renderer inferred.
+        reportedMs:
+          message.elapsedSeconds === undefined ? undefined : message.elapsedSeconds * 1000,
         // Absent until the Thread reports a reading of its own. `reduce` keeps
         // these apart from the Session's window on purpose (#17), and reaching
         // for the Session's number here would undo that in the drawing.
@@ -262,6 +271,13 @@ export function useThreads(
   }, [running, clock])
 
   return readings.map((reading) => {
+    // The runtime's reading wins wherever it exists: it is measured, and this
+    // screen's is inferred from when it happened to start watching. That is
+    // the whole of the mid-flight gap — a Thread ninety seconds in that this
+    // screen only just met reads as ninety seconds, not as nothing.
+    if (reading.reportedMs !== undefined) {
+      return { ...reading, elapsedMs: reading.reportedMs }
+    }
     const seen = watched.current.get(reading.thread)
     if (seen?.from === undefined) return reading
     return { ...reading, elapsedMs: (seen.to ?? now) - seen.from }

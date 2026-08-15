@@ -76,6 +76,7 @@ export type AgentQueryOptions = Pick<
   | 'allowedTools'
   | 'disallowedTools'
   | 'includePartialMessages'
+  | 'forwardSubagentText'
 >
 
 /** Only what this handler ever asks of a query. */
@@ -240,7 +241,24 @@ class AgentSession {
   #queryOptions(): AgentQueryOptions {
     const host = this.#options
     const permissionMode = host.permissionMode ?? 'bypassPermissions'
-    const options: AgentQueryOptions = { includePartialMessages: true, permissionMode }
+    // `forwardSubagentText` is off by default, and the SDK says what that
+    // costs: without it "only tool_use/tool_result blocks from subagents are
+    // emitted (enough for a heartbeat counter)." A heartbeat counter is not a
+    // Transcript — every Thread would show what a sub-agent did and never what
+    // it was doing it for.
+    //
+    // It is safe to ask for **only because attribution landed first**. Turned
+    // on without it, three sub-agents' prose and thinking flow down the same
+    // path as the agent's own, and a block is identified by its index alone —
+    // so a delta grows whichever bubble was last opened and a background
+    // agent's words land inside the answer to the person. What makes it safe
+    // is that a block is keyed by its Thread as well as its index, in this
+    // handler's folding and again in the hook's. Forge hit exactly this.
+    const options: AgentQueryOptions = {
+      includePartialMessages: true,
+      forwardSubagentText: true,
+      permissionMode,
+    }
 
     // The SDK refuses to bypass permissions unless the bypass is said twice, so
     // that it is never reached by default. Here it is the default (ADR-0003).

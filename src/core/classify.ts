@@ -27,6 +27,7 @@ import type {
   ThreadOpened,
   TokenUsage,
   ToolCallFrame,
+  ToolProgressFrame,
   ToolResultFrame,
 } from './frame.ts'
 
@@ -63,6 +64,8 @@ export function classify(message: ClassifyInput): Frame[] {
       return person(m)
     case 'result':
       return outcome(m)
+    case 'tool_progress':
+      return toolProgress(m)
     case 'conversation_reset': {
       const transcriptId = str(m['new_conversation_id'])
       return transcriptId === undefined ? [] : [{ kind: 'reset', transcriptId }]
@@ -286,6 +289,32 @@ function textIn(content: unknown): string {
       return str(block['type']) === 'text' && text !== undefined ? [text] : []
     })
     .join('\n')
+}
+
+/**
+ * The runtime's live word on a call that has not answered yet.
+ *
+ * Emitted rather than dropped because it is the only place the wire says how
+ * long something has been running. On a `Task` call that is how long a Thread
+ * has been going — which nothing else reports, and which a renderer would
+ * otherwise have to guess from when it happened to start watching.
+ */
+function toolProgress(m: Rec): Frame[] {
+  const id = str(m['tool_use_id'])
+  const name = str(m['tool_name'])
+  const elapsedSeconds = num(m['elapsed_time_seconds'])
+  if (id === undefined || name === undefined || elapsedSeconds === undefined) return []
+  return [
+    compact<ToolProgressFrame>({
+      kind: 'tool-progress',
+      id,
+      name,
+      elapsedSeconds,
+      thread: str(m['parent_tool_use_id']),
+      subagentType: str(m['subagent_type']),
+      heartbeat: m['heartbeat'] === true ? true : undefined,
+    }),
+  ]
 }
 
 /** A Thread is the line of work opened by a `Task` call. */

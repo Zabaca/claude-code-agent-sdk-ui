@@ -285,6 +285,12 @@ const THREE_THREADS: Beat[] = [
     description: 'audit server',
     subagentType: 'general-purpose',
   }),
+  // A Thread saying what it is doing, which only arrives at all because the
+  // handler asks for it (#19). Block 0 — the same index the main agent's own
+  // prose uses, because the index counts blocks within a message and each
+  // agent is writing its own. Two blocks share an index here and stay apart,
+  // which is the thing that made forwarding safe to turn on.
+  ...prose('Checking whether reduce touches a clock.', { block: 0, thread: 'toolu_task_core' }),
   // Interleaved on purpose: read down the Transcript and these four calls
   // arrive in an order no single agent could have produced.
   ...tool({

@@ -242,6 +242,92 @@ test('three concurrent Threads stay apart, and none of their work becomes the ma
   view.unmount()
 })
 
+test('with a Thread’s prose forwarded, the main agent’s words stay the main agent’s', async () => {
+  // #19's hazard, and the reason forwarding was only safe to turn on after
+  // attribution landed. With it off, nothing but the main agent ever streamed
+  // prose, so a block index alone identified a block. With it on, a sub-agent
+  // streams too — and both start at block 0, because the index counts blocks
+  // within a message and each is writing its own. Keyed by index alone, the
+  // two sentences below grow the same bubble: whichever delta arrives next
+  // appends to whatever the last one opened, and a background agent's words
+  // land in the middle of the agent's answer to the person.
+  //
+  // Driven through the real handler, because its folding is where that key is.
+  const sdk = fakeQuery()
+  const view = await mount(createAgentHandler({ createQuery: sdk.createQuery }))
+
+  await type('delegate the audit')
+  await enter()
+  await said(
+    sdk,
+    init('sess-forward'),
+    asked('delegate the audit'),
+    opening({ id: 'toolu_task_core', description: 'audit core', subagent_type: 'Explore' }),
+  )
+
+  // Both open a block 0 and write into it, alternating — which is what two
+  // agents talking at once actually puts on one stream.
+  await said(
+    sdk,
+    blockOpens(null, 0),
+    blockOpens('toolu_task_core', 0),
+    writes(null, 0, 'The audit'),
+    writes('toolu_task_core', 0, 'Reading'),
+    writes(null, 0, ' is running.'),
+    writes('toolu_task_core', 0, ' reduce.ts.'),
+  )
+
+  // Two lines, each whole, neither carrying a word of the other.
+  expect(screen.getAllByText('The audit is running.')).toHaveLength(1)
+  expect(screen.getAllByText('Reading reduce.ts.')).toHaveLength(1)
+
+  // And attribution is the half #19 could have broken: forwarding makes more
+  // messages carry `parent_tool_use_id`, so the risk runs both ways. The
+  // Thread's sentence belongs to the Thread; the main agent's belongs to no
+  // Thread at all and must not have acquired one.
+  expect(threadHolding('Reading reduce.ts.')).toBe('toolu_task_core')
+  expect(threadHolding('The audit is running.')).toBeUndefined()
+
+  // The whole Turn's worth: exactly one entry on screen is a Thread's, and it
+  // is none of the person's words, the `Task` call, or the agent's answer. A
+  // blanket attribution would sweep those up and still pass the two
+  // assertions above.
+  expect(document.querySelectorAll('[data-thread]')).toHaveLength(1)
+
+  view.unmount()
+})
+
+test('a Thread reports its own progress, and the meter prefers the runtime’s clock to its own', async () => {
+  // `tool_progress` is the SDK's live word on a call still running — and for a
+  // `Task` call, that call *is* the Thread. It carries an elapsed time the
+  // runtime measured, which is the one thing this renderer could not know:
+  // with no timestamp on any other Frame, a Thread joined mid-flight was timed
+  // from first sight and could only ever be a lower bound.
+  const sdk = fakeQuery()
+  const view = await mount(createAgentHandler({ createQuery: sdk.createQuery }))
+
+  await type('delegate the audit')
+  await enter()
+  await said(
+    sdk,
+    init('sess-progress'),
+    asked('delegate the audit'),
+    opening({ id: 'toolu_task_core', description: 'audit core', subagent_type: 'Explore' }),
+  )
+
+  // This screen has watched for no time at all and the runtime says the Thread
+  // is 95 seconds in — exactly what a reload mid-flight produces.
+  await said(sdk, progressing('toolu_task_core', 'Task', 95))
+
+  expect(meter('toolu_task_core')).toContain('1m 35s')
+  // Not the renderer's own answer, which is `0s` here. A meter that ignored
+  // the runtime's number would report a Thread a minute and a half in as one
+  // that had only just started.
+  expect(meter('toolu_task_core')).not.toContain('0s')
+
+  view.unmount()
+})
+
 // --- driving the seam ---------------------------------------------------------
 
 /** The command names the menu is offering, in the order it offers them. */
@@ -469,6 +555,44 @@ function holding(thread: string | null, totalTokens: number): ClassifyInput {
       total_tokens: totalTokens,
       raw_max_tokens: 200000,
     },
+  }
+}
+
+/** The Thread the entry holding these exact words belongs to, if any. */
+function threadHolding(text: string): string | undefined {
+  return screen.getByText(text).closest<HTMLElement>('[data-thread]')?.dataset['thread']
+}
+
+/**
+ * A block opening on the stream. `parent_tool_use_id` is what says whose block
+ * it is — and with a Thread's prose forwarded, two of them are open at once.
+ */
+function blockOpens(thread: string | null, index: number): ClassifyInput {
+  return {
+    type: 'stream_event',
+    parent_tool_use_id: thread,
+    event: { type: 'content_block_start', index, content_block: { type: 'text', text: '' } },
+  }
+}
+
+/** More of a block, as it is written. */
+function writes(thread: string | null, index: number, text: string): ClassifyInput {
+  return {
+    type: 'stream_event',
+    parent_tool_use_id: thread,
+    event: { type: 'content_block_delta', index, delta: { type: 'text_delta', text } },
+  }
+}
+
+/** The runtime's live word on a call still running, and how long it has been. */
+function progressing(id: string, name: string, seconds: number): ClassifyInput {
+  return {
+    type: 'tool_progress',
+    tool_use_id: id,
+    tool_name: name,
+    parent_tool_use_id: null,
+    elapsed_time_seconds: seconds,
+    subagent_type: 'Explore',
   }
 }
 

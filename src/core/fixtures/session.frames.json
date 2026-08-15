@@ -110,6 +110,14 @@
     "thread": "toolu_task"
   },
   {
+    "kind": "tool-progress",
+    "id": "toolu_task",
+    "name": "Task",
+    "elapsedSeconds": 12,
+    "subagentType": "code-reviewer",
+    "heartbeat": true
+  },
+  {
     "kind": "hook",
     "id": "hook-1",
     "name": "format-on-edit",

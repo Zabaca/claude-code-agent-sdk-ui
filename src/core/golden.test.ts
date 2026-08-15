@@ -45,6 +45,7 @@ describe('the golden Frame log', () => {
       text: true,
       reasoning: true,
       'tool-call': true,
+      'tool-progress': true,
       'tool-result': true,
       image: true,
       settled: true,
@@ -227,6 +228,9 @@ describe('replay', () => {
       'hook',
       'hook',
       'text',
+      // Progress belongs here and not among the appenders: it is more said
+      // about a call already on screen, never a second entry beside it.
+      'tool-progress',
       'tool-result',
       'tool-result',
       'tool-result',

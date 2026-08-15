@@ -175,10 +175,25 @@ test('no request field can influence cwd, tools, permissionMode or systemPrompt'
 
   expect(fake.calls[0]?.options).toEqual({
     includePartialMessages: true,
+    forwardSubagentText: true,
     permissionMode: 'bypassPermissions',
     allowDangerouslySkipPermissions: true,
     cwd: '/work',
   })
+})
+
+test("a Thread's prose is asked for, or a sub-agent is a tool count with no account of itself", async () => {
+  // Off by default, and the SDK says what that costs: "only tool_use /
+  // tool_result blocks from subagents are emitted (enough for a heartbeat
+  // counter)." A heartbeat counter is not a Transcript. Left off, every
+  // surface built on Threads shows what a sub-agent *did* and never what it
+  // was doing it for.
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  await handler(prompt('hello'))
+
+  expect(fake.calls[0]?.options.forwardSubagentText).toBe(true)
 })
 
 test('a host that wants permissions back gets no dangerous opt-in with them', async () => {
@@ -192,6 +207,7 @@ test('a host that wants permissions back gets no dangerous opt-in with them', as
 
   expect(fake.calls[0]?.options).toEqual({
     includePartialMessages: true,
+    forwardSubagentText: true,
     permissionMode: 'acceptEdits',
   })
 })

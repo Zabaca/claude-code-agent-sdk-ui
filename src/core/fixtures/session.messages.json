@@ -108,6 +108,18 @@
     }
   },
   {
+    "type": "tool_progress",
+    "session_id": "sess-golden",
+    "uuid": "u-008b",
+    "tool_use_id": "toolu_task",
+    "tool_name": "Task",
+    "parent_tool_use_id": null,
+    "elapsed_time_seconds": 12,
+    "task_id": "task-review",
+    "subagent_type": "code-reviewer",
+    "heartbeat": true
+  },
+  {
     "type": "system",
     "subtype": "hook_started",
     "session_id": "sess-golden",

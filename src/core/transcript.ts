@@ -152,6 +152,12 @@ export type ToolCallMessage = {
   thread?: string
   /** Present on a `Task` call: the Thread this call opens. */
   opens?: ThreadOpened
+  /**
+   * How long the runtime last said the call had been running. The only
+   * duration here that a clock measured rather than a renderer inferred — and
+   * on a `Task` call it is how long the Thread has been going.
+   */
+  elapsedSeconds?: number
 }
 
 /** `pending` until the tool answers; then whether it answered or failed. */

@@ -159,6 +159,12 @@ test('replay shows three Threads running at once, told apart and metered', async
   // The Thread that reported a window shows it; the two that did not show no
   // figure — not a zero, and not the main agent's 186k borrowed as theirs.
   expect(reads('toolu_task_core')).toContain('7.4k context')
+
+  // A Thread's own prose, on screen and attributed. Without the handler asking
+  // for it (#19) this line would not exist at all, and the playground would be
+  // demonstrating the heartbeat-counter view it was built to replace.
+  const spoke = screen.getByText('Checking whether reduce touches a clock.')
+  expect(spoke.closest<HTMLElement>('[data-thread]')?.dataset['thread']).toBe('toolu_task_core')
   expect(reads('toolu_task_ui')).not.toContain('context')
   expect(reads('toolu_task_ui')).not.toContain('186k')
   view.unmount()

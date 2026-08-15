@@ -79,6 +79,18 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
           }),
         )
         break
+      case 'tool-progress': {
+        // Patches the call it is about, exactly as a result does, and for the
+        // same reason: progress is more said about one call, not a second
+        // entry in the Transcript. A progress Frame whose call is absent has
+        // nothing to attach to — a log truncated before the call — and is
+        // dropped rather than conjuring one.
+        const at = calls.get(frame.id)
+        const call = at === undefined ? undefined : messages[at]
+        if (at === undefined || call?.kind !== 'tool-call') break
+        messages[at] = { ...call, elapsedSeconds: frame.elapsedSeconds }
+        break
+      }
       case 'tool-result': {
         const at = calls.get(frame.id)
         const call = at === undefined ? undefined : messages[at]
