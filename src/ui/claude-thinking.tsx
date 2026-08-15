@@ -10,6 +10,11 @@
  *     inline <style> block as well as the element styles
  *   - `--font-geist-mono` becomes `--cc-font-mono`
  *   - the `cw-verb` shimmer class is namespaced to `cc-cw-verb`
+ *   - `showTokens` draws a `tokens` prop the caller supplies, rather than
+ *     upstream's `secs * 137` — an invented figure that rises convincingly.
+ *     With no reading given, the count is absent rather than zero.
+ *   - the elapsed count resets when `running` turns back on, so a second Turn
+ *     does not open reading the first one's elapsed
  */
 import * as React from "react";
 
@@ -38,11 +43,18 @@ export function ClaudeThinking({
   running = true,
   verbs = VERBS,
   showTokens = true,
+  tokens: count,
   className,
 }: {
   running?: boolean;
   verbs?: string[];
   showTokens?: boolean;
+  /**
+   * How many tokens the reading is of — the caller's number, never one made
+   * here. Upstream drew `secs * 137`, which rises convincingly and means
+   * nothing.
+   */
+  tokens?: number;
   className?: string;
 }) {
   const prefersReduced = usePrefersReducedMotion();
@@ -58,6 +70,10 @@ export function ClaudeThinking({
 
   React.useEffect(() => {
     if (!running) return;
+    // A Turn's elapsed belongs to that Turn. Left standing across the gap, the
+    // count comes back reading the *previous* Turn's — which looks exactly
+    // like a meter that never stopped, and is wrong in the same way.
+    setSecs(0);
     const id = setInterval(() => setSecs((s) => s + 1), 1000);
     return () => clearInterval(id);
   }, [running]);
@@ -72,7 +88,12 @@ export function ClaudeThinking({
   if (!running) return null;
 
   const verb = verbs[verbIdx % verbs.length];
-  const tokens = showTokens ? ` · ↑ ${Math.max(0, secs * 137)} tokens` : "";
+  // Asked for and given: `showTokens` is the caller's permission, `count` is
+  // the reading. Missing the reading, the line says nothing rather than `0` —
+  // a zero here is indistinguishable from a window that is genuinely empty,
+  // and a reading of zero is still shown, because absent is not zero.
+  const tokens =
+    showTokens && count !== undefined ? ` · ↑ ${group(count)} tokens` : "";
 
   return (
     <div
@@ -126,6 +147,11 @@ export function ClaudeThinking({
       </span>
     </div>
   );
+}
+
+/** Grouped by hand rather than by locale, so the same reading reads the same anywhere. */
+function group(count: number): string {
+  return String(Math.round(count)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
 function usePrefersReducedMotion() {

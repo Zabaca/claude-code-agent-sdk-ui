@@ -128,8 +128,29 @@ export function ClaudeSession({
       <ThreadMeters threads={opened} />
 
       {/* Claude Code's working line, driven by real Turn state rather than by
-          a timer of the container's own. */}
-      {working ? <ClaudeThinking running /> : null}
+          a timer of the container's own.
+
+          The count is `context.totalTokens` — how full the context window is —
+          and nothing else. It is deliberately not defaulted and deliberately
+          not backfilled from `rateLimit`: the two are different meters on
+          different clocks, one answering "how full is this conversation" and
+          the other "how much of my week is left", and a line that quietly
+          substitutes one for the other reads as a measurement while being a
+          different measurement. Until a `context` Frame has arrived there is
+          no reading, and `ClaudeThinking` shows no number at all.
+
+          `transcript.context` is the thread-less reading — the conversation's
+          own window, never a Thread's (#17). That matters most right here,
+          with the Thread meters drawn immediately above: two meters side by
+          side, each reporting the thing it is drawn next to. */}
+      {working ? (
+        <ClaudeThinking
+          running
+          {...(transcript.context !== undefined
+            ? { tokens: transcript.context.totalTokens }
+            : {})}
+        />
+      ) : null}
 
       {session.error !== undefined ? (
         <div role="alert" style={{ color: 'var(--cc-error)' }}>

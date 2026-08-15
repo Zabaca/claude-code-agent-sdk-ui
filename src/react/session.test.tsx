@@ -546,6 +546,140 @@ test("effort is the composer's own, because no Frame has a word for it", async (
   expect(session.current.effort).toBe('max')
 })
 
+test('the two meters are separate readings, and neither stands in for the other', async () => {
+  const fake = fakeSse()
+  const alone = await mount(fake)
+
+  // How much of the subscription is left, and nothing about the window.
+  await act(async () =>
+    fake.frame({
+      kind: 'rate-limit',
+      status: 'allowed_warning',
+      limitType: 'weekly',
+      utilization: 0.62,
+      resetsAt: 1_760_000_000,
+    }),
+  )
+
+  expect(alone.current.transcript.rateLimit).toEqual({
+    status: 'allowed_warning',
+    limitType: 'weekly',
+    utilization: 0.62,
+    resetsAt: 1_760_000_000,
+  })
+  // The window has not been measured. A reading derived from the rate limit
+  // would be a number about the week presented as a number about the
+  // conversation — the two answer different questions on different clocks.
+  expect(alone.current.transcript.context).toBeUndefined()
+
+  alone.unmount()
+
+  // And the other way round: a full window says nothing about the week.
+  const other = fakeSse()
+  const window = await mount(other)
+
+  await act(async () =>
+    other.frame({ kind: 'context', totalTokens: 91_500, maxTokens: 200_000, percentage: 45.75 }),
+  )
+
+  expect(window.current.transcript.context).toEqual({
+    totalTokens: 91_500,
+    maxTokens: 200_000,
+    percentage: 45.75,
+  })
+  expect(window.current.transcript.rateLimit).toBeUndefined()
+
+  // Both present, and still two readings rather than one blended figure.
+  await act(async () => other.frame({ kind: 'rate-limit', utilization: 0.62 }))
+
+  expect(window.current.transcript.context?.totalTokens).toBe(91_500)
+  expect(window.current.transcript.rateLimit?.utilization).toBe(0.62)
+
+  window.unmount()
+})
+
+test('cost, harness, hook output and an unprompted cause are all reachable as data', async () => {
+  const fake = fakeSse()
+  const session = await mount(fake)
+
+  await act(async () => {
+    fake.frame({
+      kind: 'harness',
+      model: 'claude-opus-4',
+      cwd: '/repo',
+      version: '2.1.206',
+      tools: ['Read', 'Bash'],
+      mcpServers: [{ name: 'linear', status: 'connected' }],
+    })
+    // A Turn the person at the keyboard did not start. Without the cause, the
+    // Transcript shows words nobody in the room typed and cannot say who did.
+    fake.frame({
+      kind: 'prompt',
+      text: 'ship it',
+      origin: { kind: 'discord', from: 'U123', name: 'ana', server: 'zabaca' },
+    })
+    fake.frame({
+      kind: 'hook',
+      id: 'hook-guard',
+      name: 'block-secrets',
+      hookEvent: 'PreToolUse',
+      status: 'error',
+      stderr: 'refused: .env is not readable',
+      exitCode: 2,
+    })
+    fake.frame({ kind: 'settled', result: 'shipped', turns: 3 })
+    fake.frame({
+      kind: 'cost',
+      usd: 0.0412,
+      turns: 3,
+      durationMs: 8400,
+      usage: { inputTokens: 12_000, outputTokens: 900 },
+      byModel: { 'claude-opus-4': { costUsd: 0.0412, inputTokens: 12_000 } },
+    })
+  })
+
+  const { transcript } = session.current
+
+  // No chrome for any of these in v0.1 — the harness panel is v0.2. What the
+  // hook owes is that each is *there*, whole, for a host that wants to draw it
+  // without forking the package.
+  expect(transcript.harness).toEqual({
+    model: 'claude-opus-4',
+    cwd: '/repo',
+    version: '2.1.206',
+    tools: ['Read', 'Bash'],
+    mcpServers: [{ name: 'linear', status: 'connected' }],
+  })
+  expect(transcript.cost).toEqual({
+    usd: 0.0412,
+    turns: 3,
+    durationMs: 8400,
+    usage: { inputTokens: 12_000, outputTokens: 900 },
+    byModel: { 'claude-opus-4': { costUsd: 0.0412, inputTokens: 12_000 } },
+  })
+
+  // A hook's own words, all three channels of them. Which channel a hook wrote
+  // to is the hook's business, and choosing one for it is how a refusal's
+  // reason goes missing.
+  expect(transcript.messages).toContainEqual({
+    kind: 'hook',
+    id: 'hook-guard',
+    name: 'block-secrets',
+    hookEvent: 'PreToolUse',
+    status: 'error',
+    stderr: 'refused: .env is not readable',
+    exitCode: 2,
+  })
+
+  expect(transcript.messages).toContainEqual({
+    kind: 'prompt',
+    text: 'ship it',
+    origin: { kind: 'discord', from: 'U123', name: 'ana', server: 'zabaca' },
+  })
+
+  session.unmount()
+})
+
 test('the react entry point reaches core and nothing else', async () => {
   // The four entry points are separately consumable, and `package.json` maps
   // each to raw source — so an import of `./react` that reached `./server`

@@ -602,6 +602,143 @@ test('the working line is on screen only while the Turn runs', async () => {
   view.unmount()
 })
 
+test('the working line shows how full the context is, while the Turn is still running', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'read the whole repo' })
+  })
+  // No reading yet, so no number. A `0` here would be the working line
+  // reporting an empty context window rather than an unmeasured one.
+  expect(working()).not.toContain('tokens')
+
+  await act(async () => {
+    fake.frame({ kind: 'context', totalTokens: 52_000, maxTokens: 200_000 })
+  })
+  expect(working()).toContain('52,000 tokens')
+
+  // A second reading, still mid-Turn: the SDK attaches `context_usage` to every
+  // assistant message, so the count moves while the agent works. Read only at
+  // the end, the meter would sit on a stale figure for the whole Turn — which
+  // is the one stretch of time anybody is watching it.
+  await act(async () => {
+    fake.frame({ kind: 'context', totalTokens: 91_500, maxTokens: 200_000 })
+  })
+  expect(working()).toContain('91,500 tokens')
+  expect(there(screen.queryByRole('status'))).toBe(true)
+
+  view.unmount()
+})
+
+test('deliberation is off the screen by default, and on it only when asked for', async () => {
+  const fake = fakeSse()
+  const quiet = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'is this safe?' })
+    // Live and retained alike. Streaming deliberation into the Transcript would
+    // put the model's reasoning on screen as though it were an answer, which is
+    // a product decision nobody made.
+    fake.partial({ block: 0, kind: 'reasoning', text: 'Maybe not, let me check' })
+    fake.frame({ kind: 'reasoning', text: 'Maybe not, let me check the caller' })
+    fake.frame({ kind: 'text', text: 'It is safe.' })
+  })
+
+  expect(screen.getByText('It is safe.')).toBeDefined()
+  expect(there(screen.queryByText(/Maybe not/))).toBe(false)
+
+  quiet.unmount()
+
+  // The same log, with the flag on. Nothing about the wire changed — the
+  // Frames were always there — so this is a viewing decision, not a capture
+  // one, and the escape hatch exists for the person debugging a prompt.
+  const asked = await mount(fake, { reasoning: true })
+
+  const deliberation = screen.getByText('Maybe not, let me check the caller')
+  expect(deliberation).toBeDefined()
+  // And told apart from the answer. Drawn identically, thinking on screen
+  // *is* an answer to anyone reading it.
+  expect(deliberation.className).not.toBe(screen.getByText('It is safe.').className)
+
+  asked.unmount()
+})
+
+test("the working line reports the conversation's window, never a sub-agent's", async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  // The recorded stream takes two context readings: one inside the Thread the
+  // `Task` call opened, and one for the agent's own window. Both are read off
+  // the fixture rather than restated, so a regenerated golden file can still
+  // disagree with this test — every other test of the count builds its own
+  // Frame, and a line wired to a shape nobody sends is wired to nothing.
+  const readings = golden.flatMap((frame, at) =>
+    frame.kind === 'context' ? [{ at, thread: frame.thread, tokens: frame.totalTokens }] : [],
+  )
+  const threaded = readings.find((one) => one.thread !== undefined)
+  const own = readings.find((one) => one.thread === undefined)
+  if (!threaded || !own) throw new Error('the golden log needs both a Thread reading and its own')
+
+  // Both land while the Turn is still running, so the working line is on
+  // screen for each — including for the one it must refuse to draw.
+  const ended = golden.findIndex((frame) => frame.kind === 'settled' || frame.kind === 'failed')
+  expect(threaded.at).toBeLessThan(own.at)
+  expect(own.at).toBeLessThan(ended)
+
+  await act(async () => {
+    for (const frame of golden.slice(0, threaded.at + 1)) fake.frame(frame)
+  })
+
+  // A sub-agent's window is not the conversation's. This is #17 at the seam a
+  // person actually reads: the Thread's 7,000 used to land on the Session
+  // meter, so the line drawn next to the conversation reported a background
+  // agent's window — a number that is not about the thing it is drawn beside.
+  // The meter is on screen and has nothing to say yet, which is the correct
+  // silence: guarded in `core` and at the hook, and until now nowhere here.
+  expect(working()).not.toContain(threaded.tokens.toLocaleString('en-US'))
+  expect(working()).not.toContain('tokens')
+
+  await act(async () => {
+    for (const frame of golden.slice(threaded.at + 1, own.at + 1)) fake.frame(frame)
+  })
+
+  expect(working()).toContain(`${own.tokens.toLocaleString('en-US')} tokens`)
+  // And the Thread's reading never appears — not before its own arrives, and
+  // not after it either.
+  expect(working()).not.toContain(threaded.tokens.toLocaleString('en-US'))
+
+  view.unmount()
+})
+
+test('a rate limit is never read as a context reading', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'keep going' })
+    // The subscription meter, and only it. It answers "how much of my week is
+    // left"; the working line asks "how full is this conversation". A fallback
+    // from one to the other would put a number on screen that looks like a
+    // reading and is a reading of something else entirely.
+    fake.frame({ kind: 'rate-limit', status: 'allowed_warning', utilization: 0.62 })
+  })
+
+  expect(working()).not.toContain('tokens')
+  expect(working()).not.toContain('62')
+  expect(working()).not.toContain('0.62')
+
+  // And once the context meter does report, that is what the line shows — the
+  // rate limit sitting beside it changes nothing.
+  await act(async () => {
+    fake.frame({ kind: 'context', totalTokens: 52_000 })
+  })
+  expect(working()).toContain('52,000 tokens')
+  expect(working()).not.toContain('62%')
+
+  view.unmount()
+})
+
 test('the mode line reports what the runtime loaded, and is not a control', async () => {
   const fake = fakeSse()
   const view = await mount(fake)
@@ -1076,4 +1213,14 @@ export { recorder }
  */
 function there(node: Element | null | undefined): boolean {
   return node !== null && node !== undefined
+}
+
+/** What the working line reads, minus the stylesheet it carries inline. */
+function working(): string {
+  const status = screen.getByRole('status')
+  let text = status.textContent ?? ''
+  for (const style of status.querySelectorAll('style')) {
+    text = text.replace(style.textContent ?? '', '')
+  }
+  return text
 }

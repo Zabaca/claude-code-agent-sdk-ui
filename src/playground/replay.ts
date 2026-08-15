@@ -383,7 +383,16 @@ export const OPENING: Beat[] = [
     },
   },
   { after: 260, frame: { kind: 'prompt', text: 'the suite is flaky — find out why' } },
+  // Deliberation, played and — by default — not drawn. The Frame is on the wire
+  // either way; what the flag decides is whether a viewer reads it. Played here
+  // so the default is demonstrated against something rather than merely being
+  // true of a log that never had any.
+  { frame: { kind: 'reasoning', text: 'Flaky usually means a clock or a shared fixture.' } },
   ...prose('Reading the test first.'),
+  // How full the window is, as the SDK reports it: attached to assistant
+  // messages, so it arrives while the Turn is running rather than with the
+  // result. This is what the working line counts.
+  { frame: { kind: 'context', totalTokens: 24_800, maxTokens: 200_000, percentage: 12.4 } },
   ...tool({
     id: 'toolu_read',
     name: 'Read',
@@ -416,6 +425,10 @@ export const OPENING: Beat[] = [
       ],
     },
   },
+  // A second reading, mid-Turn: the count on the working line moves while the
+  // agent works. One reading would leave a meter nobody can tell from a frozen
+  // one.
+  { frame: { kind: 'context', totalTokens: 61_200, maxTokens: 200_000, percentage: 30.6 } },
   ...prose('There it is. The fixture is regenerated per run; pinning it.', { block: 2 }),
   ...tool({
     id: 'toolu_edit',
@@ -434,6 +447,19 @@ export const OPENING: Beat[] = [
   ...prose('Pinned, and the suite is green.', { block: 3 }),
   { frame: { kind: 'settled', result: 'Pinned the fixture; the suite is green.', turns: 1 } },
   { frame: { kind: 'cost', usd: 0.0412, turns: 1, durationMs: 8400 } },
+  // The other meter, and the reason the two are never blended: this one is
+  // about the week, not about the conversation, and it moves on a clock the
+  // Session has no say in. No chrome for it in v0.1 — it is data the hook
+  // hands out, and the harness panel is what will draw it.
+  {
+    frame: {
+      kind: 'rate-limit',
+      status: 'allowed_warning',
+      limitType: 'weekly',
+      utilization: 0.62,
+      resetsAt: 1_760_000_000,
+    },
+  },
 
   // --- the divergences ---------------------------------------------------------
 
@@ -466,6 +492,8 @@ export const OPENING: Beat[] = [
     },
   },
   ...prose('Blocked on that one. Widening the search instead.', { block: 4 }),
+  // Nearly full, which is what is about to force the compaction below.
+  { frame: { kind: 'context', totalTokens: 180_000, maxTokens: 200_000, percentage: 90 } },
   {
     after: 400,
     frame: {
@@ -476,6 +504,11 @@ export const OPENING: Beat[] = [
       durationMs: 3100,
     },
   },
+  // And the count falls. This is the meter earning its place: every Message
+  // above the marker is exactly where it was, while the window the agent is
+  // actually working from has just been emptied — the working line's number
+  // dropping is the only thing on screen that moves with it.
+  { frame: { kind: 'context', totalTokens: 42_000, maxTokens: 200_000, percentage: 21 } },
   ...prose('Working from the summary now.', { block: 5 }),
   {
     after: 300,
