@@ -88,6 +88,40 @@ describe("ClaudePrompt", () => {
     expect(efforts).toEqual(["low"]);
   });
 
+  test("draws its own controls as text, not as the browser's button chrome", () => {
+    // Two decisions from #4 collide here. Upstream draws the effort chip and
+    // the mode line as spans; `onEffortChange`/`onModeChange` make them real
+    // buttons. Preflight is deliberately out of the stylesheet, because a
+    // component library has no business resetting its host's page — and
+    // Preflight is exactly what normally neutralises a button's border,
+    // background, padding and font. So each control has to neutralise its own.
+    //
+    // The breakage: drop any one of these from either control — or add a third
+    // control without them — and the user agent paints a raised grey box with
+    // Arial in it, floating above the composer's rules.
+    const view = render(
+      <ClaudePrompt effort="high" onEffortChange={() => {}} onModeChange={() => {}} />,
+    );
+    const controls = screen.getAllByRole("button");
+    expect(controls).toHaveLength(2);
+
+    for (const control of controls) {
+      const drawn = control.className.split(/\s+/);
+      for (const neutralised of [
+        "cc:appearance-none",
+        "cc:border-0",
+        "cc:p-0",
+        "cc:m-0",
+        "cc:[font:inherit]",
+        "cc:text-inherit",
+        "cc:bg-transparent",
+      ]) {
+        expect(drawn).toContain(neutralised);
+      }
+    }
+    view.unmount();
+  });
+
   test("stays inert chrome when no callbacks are given", () => {
     render(<ClaudePrompt mode="auto" effort="high" />);
     expect(screen.queryAllByRole("button")).toEqual([]);

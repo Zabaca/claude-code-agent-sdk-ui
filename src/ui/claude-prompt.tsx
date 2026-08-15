@@ -15,6 +15,12 @@
  *     the next value rather than keeping any of it. Offered upstream.
  *   - upstream's bare `term-input` hook class is namespaced to `cc-term-input`;
  *     it is a styling hook for consumers, not a Tailwind utility
+ *   - the effort chip and the mode line neutralise the user agent's button
+ *     chrome on themselves (`CONTROL` below). Upstream draws both as spans and
+ *     never meets the problem; here a callback turns them into real buttons,
+ *     and the stylesheet ships no Preflight — deliberately, because a component
+ *     library has no business resetting its host's page. Scoped to our own two
+ *     controls so that decision survives. Offered upstream.
  *   - `ClaudeMode` and `ClaudeEffort` are defined in `core/composer.ts` and
  *     re-exported here unchanged, so that `react` can name a mode without
  *     depending on `ui`. The contract is identical and re-syncing is unaffected
@@ -94,6 +100,18 @@ function next<T>(cycle: T[], current: T): T {
   const at = cycle.indexOf(current);
   return cycle[(at + 1) % cycle.length] as T;
 }
+
+/**
+ * What a control has to say to look like the text upstream draws.
+ *
+ * The stylesheet ships no Preflight, so nothing has reset the user agent's
+ * button rules — a control that says nothing here is painted as a raised grey
+ * box with Arial in it, sitting above the composer's rules. Said on the two
+ * controls themselves rather than in a `button {}` rule, because resetting a
+ * host's elements is exactly what this package refuses to do.
+ */
+const CONTROL =
+  "cc:m-0 cc:appearance-none cc:border-0 cc:bg-transparent cc:p-0 cc:[font:inherit] cc:text-inherit";
 
 export function ClaudePrompt({
   value,
@@ -179,7 +197,7 @@ export function ClaudePrompt({
           {onEffortChange && effort !== false ? (
             <button
               type="button"
-              className="cc:min-w-0 cc:cursor-pointer cc:bg-transparent cc:text-right"
+              className={cn(CONTROL, "cc:min-w-0 cc:cursor-pointer cc:text-right")}
               onClick={() => onEffortChange(next(EFFORT_CYCLE, effort))}
             >
               {effortChip}
@@ -236,7 +254,7 @@ export function ClaudePrompt({
         {onModeChange ? (
           <button
             type="button"
-            className="cc:cursor-pointer cc:bg-transparent cc:text-left"
+            className={cn(CONTROL, "cc:cursor-pointer cc:text-left")}
             onClick={() => onModeChange(next(MODE_CYCLE, mode))}
           >
             {modeLine}
