@@ -179,9 +179,17 @@ test('a running Thread counts up, and freezes the moment it finishes', async () 
     fake.frame({ kind: 'tool-result', id: 'toolu_task', output: 'no findings', isError: false })
   })
   await clock.advance(120_000)
+  // Two minutes on, and the main agent says something — which is what forces
+  // this screen to draw again. Without that redraw the assertion below could
+  // not tell a duration that is frozen from one that merely was not recomputed,
+  // and would pass for a meter that resumes counting the next time anything
+  // at all happens.
+  await act(async () => {
+    fake.frame({ kind: 'text', text: 'The audit came back clean.' })
+  })
 
   // Frozen at what it took, and reading as complete. A meter that kept
-  // counting would say a Thread that ended two minutes ago is still working.
+  // counting would say a Thread that ended two minutes ago took 2m 5s.
   expect(elapsed('toolu_task')).toBe('5s')
   expect(meter('toolu_task').dataset['threadState']).toBe('settled')
   view.unmount()
