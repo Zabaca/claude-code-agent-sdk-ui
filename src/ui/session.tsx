@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 
+import { forgetImage, imageMarker } from '../core/composer.ts'
 import type { PromptImage } from '../core/event.ts'
 import type { SlashCommandInfo } from '../core/frame.ts'
 import type {
@@ -170,7 +171,16 @@ export function ClaudeSession({
 
       <SlashMenu commands={offered} active={active} onHighlight={setHighlighted} />
 
-      <Attachments pasted={pasted} onRemove={(at) => setPasted(without(pasted, at))} />
+      <Attachments
+        pasted={pasted}
+        onRemove={(at) => {
+          setPasted(without(pasted, at))
+          // The words follow the pictures. A draft still saying [Image #2]
+          // beside a tray holding one picture is a sentence about something
+          // that is not being sent.
+          setText((words) => forgetImage(words, at))
+        }}
+      />
 
       <Refused types={refused} />
 
@@ -196,8 +206,23 @@ export function ClaudeSession({
             files.filter((file) => !HOLDABLE.has(file.type)).map((file) => file.type || file.name),
           )
           if (holdable.length === 0) return
-          void Promise.all(holdable.map(held)).then((held) => {
-            setPasted((already) => [...already, ...held.filter(there)])
+          // Read now, not when the bytes are ready: `selectionStart` is where
+          // the cursor is *this instant*, and the read below is a promise.
+          const caret = caretIn(event.target) ?? text.length
+          // The markers number from what is already attached, so a second paste
+          // is [Image #2]. Counted from this render's `pasted` rather than from
+          // inside the updater below, because a state updater that reaches out
+          // of itself runs twice under StrictMode — and would then write the
+          // markers in twice.
+          const from = pasted.length
+          void Promise.all(holdable.map(held)).then((read) => {
+            const pictures = read.filter(there)
+            // Markers only for the pictures that actually made it. A marker for
+            // a picture nobody is holding is a sentence pointing at nothing.
+            if (pictures.length === 0) return
+            const markers = pictures.map((_, at) => imageMarker(from + at)).join(' ')
+            setPasted((already) => [...already, ...pictures])
+            setText((words) => spliced(words, Math.min(caret, words.length), `${markers} `))
           })
         }}
       >
@@ -279,21 +304,53 @@ type Pasted = { name: string; image: PromptImage }
 function Attachments({ pasted, onRemove }: { pasted: Pasted[]; onRemove: (at: number) => void }) {
   if (pasted.length === 0) return null
   return (
-    <ul className="cc:flex cc:min-w-0 cc:flex-wrap cc:gap-2" style={{ color: 'var(--cc-fg-dim)' }}>
-      {pasted.map((one, at) => (
-        <li key={`${one.name}-${at}`} data-attachment={one.name} className="cc:min-w-0">
-          <span aria-hidden>▣ </span>
-          {one.name}{' '}
-          <button
-            type="button"
-            aria-label={`Remove ${one.name}`}
-            onClick={() => onRemove(at)}
-            className="cc:m-0 cc:cursor-pointer cc:appearance-none cc:border-0 cc:bg-transparent cc:p-0 cc:[font:inherit] cc:text-inherit"
+    <ul className="cc:flex cc:min-w-0 cc:flex-wrap cc:gap-3" style={{ color: 'var(--cc-fg-dim)' }}>
+      {pasted.map((one, at) => {
+        const marker = imageMarker(at)
+        return (
+          <li
+            key={`${one.name}-${at}`}
+            data-attachment={one.name}
+            className="cc:flex cc:min-w-0 cc:items-center cc:gap-1.5"
           >
-            ✕
-          </button>
-        </li>
-      ))}
+            {/* The picture itself, not a name for it.
+
+                A screenshot is pasted from a clipboard nobody can see into, and
+                the file name a browser gives one is `image.png` every time —
+                so a tray of names cannot answer the only question a person has
+                after pasting twice, which is *which two*.
+
+                A `data:` URI here and a handle in the Transcript is not an
+                inconsistency: the rule is that a **Message** may not name a
+                location, because a Message crosses the wire from a runtime.
+                These bytes never left the browser — they came off this
+                person's clipboard a moment ago and have not been sent
+                anywhere. There is nothing to fetch and nothing to mint. */}
+            <img
+              src={`data:${one.image.mediaType};base64,${one.image.data}`}
+              // Presentational: the marker beside it is this control's label,
+              // and there is no description of a pasted picture to be had (see
+              // `describing`). An `alt` repeating "[Image #1]" would say the
+              // same thing twice to the one person who cannot check it.
+              alt=""
+              className="cc:max-h-[3em] cc:max-w-[6em] cc:self-start cc:rounded-sm"
+              style={{ border: '1px solid var(--cc-rule)' }}
+            />
+            {/* Numbered to match the marker sitting in the draft: the picture
+                and the words are the same picture, and someone editing the
+                sentence needs to know which one they are moving. */}
+            <span>{marker}</span>
+            <button
+              type="button"
+              aria-label={`Remove ${marker}`}
+              onClick={() => onRemove(at)}
+              className="cc:m-0 cc:cursor-pointer cc:appearance-none cc:border-0 cc:bg-transparent cc:p-0 cc:[font:inherit] cc:text-inherit"
+            >
+              ✕
+            </button>
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -331,6 +388,26 @@ function Refused({ types }: { types: string[] }) {
 /** The list without the one at `at`. */
 function without<T>(items: T[], at: number): T[] {
   return items.filter((_, index) => index !== at)
+}
+
+/** `words` with `insert` put in at `at`. */
+function spliced(words: string, at: number, insert: string): string {
+  return `${words.slice(0, at)}${insert}${words.slice(at)}`
+}
+
+/**
+ * Where the cursor is in the field a paste landed in, if it landed in one.
+ *
+ * The paste is listened for on the wrapper rather than on `ClaudePrompt`, which
+ * takes no `onPaste` — so what the event names is whatever had focus, and this
+ * is duck-typed rather than an `instanceof`: the component is rendered in
+ * whatever DOM the host has, and a class identity is not portable across one.
+ * Nothing focused, or something with no cursor in it, gets `undefined` and the
+ * marker goes at the end.
+ */
+function caretIn(target: EventTarget | null): number | undefined {
+  const at = (target as { selectionStart?: unknown } | null)?.selectionStart
+  return typeof at === 'number' ? at : undefined
 }
 
 /**

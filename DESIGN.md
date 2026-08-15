@@ -63,6 +63,16 @@ in Brainless as it stands:
   grows whichever bubble was last opened, landing a background agent's words
   inside the answer to the person. A block must be keyed by its Thread as well
   as its index, on the server and again in the hook.
+- **A pasted picture needs a name in the sentence.** The pictures travel in an
+  array and the words travel beside it, so a prompt carrying three screenshots
+  has no way to say which is which — every one of them is "the image". Varnick
+  writes `[Image #1]` into the draft at the cursor as each picture is pasted,
+  which is Claude Code's own format and therefore one a person and an agent both
+  already read. Two consequences that are easy to miss: the caret has to be read
+  *before* the bytes, because reading a file is asynchronous and the cursor has
+  moved by the time it resolves; and taking a picture back has to renumber the
+  markers left behind, or the words describe a picture that is no longer in the
+  request.
 - **Compaction boundaries.** When context is compacted the transcript looks
   identical before and after, while what the agent can actually *see* has been
   replaced by a summary. A divergence that arrives through normal operation is

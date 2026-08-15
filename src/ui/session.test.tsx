@@ -1054,11 +1054,15 @@ test('a pasted screenshot travels with the prompt, ahead of the words about it',
   // otherwise insert the file's *name* into the words as well.
   expect(wentThrough).toBe(false)
 
-  await type('why is this button clipped')
+  // What the composer writes in their place: one marker per picture, numbered
+  // in the order they were pasted, so the sentence can name them.
+  expect(composer().value).toBe('[Image #1] [Image #2] ')
+
+  await type('why is [Image #1] clipped and [Image #2] not')
   await enter()
 
-  // Both pictures, in the order they were pasted, ahead of the text — and the
-  // text unchanged, because a paste must not rewrite what was typed.
+  // Both pictures, in the order they were pasted, and the words the person
+  // wrote around the markers — the two halves of one sentence.
   //
   // Breakage this fails on: the paste being ignored altogether, which is the
   // silent one — the Turn runs, the agent answers, and it answers about a
@@ -1067,7 +1071,7 @@ test('a pasted screenshot travels with the prompt, ahead of the words about it',
     {
       body: {
         type: 'prompt',
-        text: 'why is this button clipped',
+        text: 'why is [Image #1] clipped and [Image #2] not',
         images: [
           { mediaType: 'image/png', data: base64('one') },
           { mediaType: 'image/png', data: base64('two') },
@@ -1116,19 +1120,120 @@ test('a screenshot with no words still starts a Turn, and is never silently drop
   const view = await mount(fake, { fetch: wire.fetch })
 
   await paste(png('one'))
+  // The words the composer wrote itself are words: a picture pasted into an
+  // empty composer sends as its own marker.
   await enter()
 
-  // "Look at this" is a whole prompt when the picture is the prompt, and the
-  // composer must not swallow it.
+  expect(wire.posted).toEqual([
+    {
+      body: {
+        type: 'prompt',
+        text: '[Image #1] ',
+        images: [{ mediaType: 'image/png', data: base64('one') }],
+      },
+    },
+  ])
+  expect(attached()).toEqual([])
+  view.unmount()
+})
+
+test('a screenshot with the marker deleted still starts a Turn', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await paste(png('one'))
+  // The marker is text like any other, so it can be deleted — and then the
+  // composer is holding a picture and no words at all. This is the arm the
+  // markers took away from the test above, and it is the one that matters:
+  // "look at this" is a whole prompt when the picture *is* the prompt.
   //
-  // Breakage this fails on — and it is the silent one, which is why it is
-  // here: `send` guards on whitespace, so a Turn carrying a picture and no
-  // words wills nothing, while the composer clears the tray on submit anyway.
-  // The screenshot vanishes, no Turn starts, and nothing on screen says why.
+  // Breakage this fails on — the silent one, which is why it is here: `send`
+  // guards on whitespace, so a Turn carrying a picture and no words wills
+  // nothing, while the composer clears the tray on submit anyway. The
+  // screenshot vanishes, no Turn starts, and nothing on screen says why.
+  await type('')
+  await enter()
+
   expect(wire.posted).toEqual([
     { body: { type: 'prompt', text: '', images: [{ mediaType: 'image/png', data: base64('one') }] } },
   ])
   expect(attached()).toEqual([])
+  view.unmount()
+})
+
+test('the marker goes in at the cursor, not at the end', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake, { fetch: recorder().fetch })
+
+  await type('why is this clipped')
+  const field = composer()
+  field.selectionStart = 7 // just after "why is "
+  field.selectionEnd = 7
+  await paste(png('one'))
+
+  // Where the cursor is, is where the person is talking about. Appending
+  // instead would make every prompt read "…and here is a picture", which is
+  // the one sentence a marker exists to avoid.
+  //
+  // Breakage this fails on: reading the caret after the bytes are read, by
+  // which time it has moved — or never reading it at all.
+  expect(composer().value).toBe('why is [Image #1] this clipped')
+  view.unmount()
+})
+
+test('the tray shows the picture, numbered to match the words', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake, { fetch: recorder().fetch })
+
+  await paste(png('one'), png('two'))
+
+  // A tray of file names cannot answer the only question a person has after
+  // pasting twice — *which two* — because a clipboard screenshot is called
+  // `image.png` every time. The picture answers it.
+  //
+  // Breakage this fails on: the tray drawn from `name`, which is what shipped.
+  const shown = [...document.querySelectorAll<HTMLImageElement>('[data-attachment] img')]
+  expect(shown).toHaveLength(2)
+  expect(shown[0]?.src).toBe(`data:image/png;base64,${base64('one')}`)
+  expect(shown[1]?.src).toBe(`data:image/png;base64,${base64('two')}`)
+
+  // And numbered the same as the markers now sitting in the draft, so moving
+  // "[Image #2]" in the sentence moves a picture the person can see.
+  expect(attached()).toEqual(['[Image #1]✕', '[Image #2]✕'])
+  expect(composer().value).toContain('[Image #2]')
+  view.unmount()
+})
+
+test('taking a picture back takes its marker with it, and renumbers the rest', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await paste(png('one'), png('two'))
+  await type('compare [Image #1] against [Image #2] please')
+
+  await act(async () => attachment(0).click())
+
+  // The first picture is gone, so the second is now the first — in the tray
+  // and in the sentence alike.
+  //
+  // Breakage this fails on: dropping the picture and leaving the words, which
+  // sends the agent a prompt about an [Image #2] that is not in the request,
+  // and no [Image #1] for the picture that is.
+  expect(composer().value).toBe('compare against [Image #1] please')
+  expect(attached()).toEqual(['[Image #1]✕'])
+
+  await enter()
+  expect(wire.posted).toEqual([
+    {
+      body: {
+        type: 'prompt',
+        text: 'compare against [Image #1] please',
+        images: [{ mediaType: 'image/png', data: base64('two') }],
+      },
+    },
+  ])
   view.unmount()
 })
 
