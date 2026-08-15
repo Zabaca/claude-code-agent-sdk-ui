@@ -183,8 +183,9 @@ test('the opening log plays every divergence, and each reaches the screen', asyn
   // the agent can see has changed. A playground that played none of them would
   // demonstrate the screen at its most convincing and least honest.
   expect(marks()).toEqual(['recall', 'hook', 'compacted', 'reset'])
-  // And a Turn that died, beside the two that did not.
-  expect(outcomes()).toEqual(['settled', 'failed', 'settled'])
+  // And a Turn that died, beside the three that did not — the last of which
+  // is the Thread case appended after the divergences.
+  expect(outcomes()).toEqual(['settled', 'failed', 'settled', 'settled'])
 
   const said = screen.getByRole('log').textContent ?? ''
   expect(said).toContain('180,000')
