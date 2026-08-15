@@ -7,6 +7,7 @@ import { reduce } from '../core/reduce.ts'
 import { fakeSse, type FakeSse } from '../react/fake.ts'
 import { useAgentSession, type AgentFetch, type AgentSessionOptions } from '../react/session.ts'
 import { ClaudeSession } from './session.tsx'
+import type { ThreadClock, ThreadDisplay } from './thread.tsx'
 
 test("the agent's prose reaches the screen", async () => {
   const fake = fakeSse()
@@ -152,6 +153,127 @@ test("a sub-agent's work is attributed to the Thread it belongs to", async () =>
   // not, and the screen has to be able to tell them apart.
   expect(entryFor('Task').dataset['thread']).toBeUndefined()
   expect(entryFor('Read').dataset['thread']).toBe('toolu_task')
+  view.unmount()
+})
+
+test('a running Thread counts up, and freezes the moment it finishes', async () => {
+  const fake = fakeSse()
+  const clock = byHand()
+  const view = await mount(fake, {}, { clock })
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'delegate the audit' })
+    fake.frame(opens('toolu_task', 'audit core', 'Explore'))
+  })
+
+  expect(meter('toolu_task').dataset['threadState']).toBe('running')
+  expect(elapsed('toolu_task')).toBe('0s')
+
+  // The meter has to move on its own: a Thread produces no Frames while it is
+  // thinking, so a duration drawn only when something arrives would sit still
+  // for exactly the stretch a viewer is asking about.
+  await clock.advance(5_000)
+  expect(elapsed('toolu_task')).toBe('5s')
+
+  await act(async () => {
+    fake.frame({ kind: 'tool-result', id: 'toolu_task', output: 'no findings', isError: false })
+  })
+  await clock.advance(120_000)
+  // Two minutes on, and the main agent says something — which is what forces
+  // this screen to draw again. Without that redraw the assertion below could
+  // not tell a duration that is frozen from one that merely was not recomputed,
+  // and would pass for a meter that resumes counting the next time anything
+  // at all happens.
+  await act(async () => {
+    fake.frame({ kind: 'text', text: 'The audit came back clean.' })
+  })
+
+  // Frozen at what it took, and reading as complete. A meter that kept
+  // counting would say a Thread that ended two minutes ago took 2m 5s.
+  expect(elapsed('toolu_task')).toBe('5s')
+  expect(meter('toolu_task').dataset['threadState']).toBe('settled')
+  view.unmount()
+})
+
+test('a Thread that failed says so, rather than reading as one that finished', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake, {}, { clock: byHand() })
+
+  await act(async () => {
+    fake.frame(opens('toolu_task', 'audit core', 'Explore'))
+    fake.frame({ kind: 'tool-result', id: 'toolu_task', output: 'crashed', isError: true })
+  })
+
+  expect(meter('toolu_task').dataset['threadState']).toBe('failed')
+  view.unmount()
+})
+
+test('a Thread that was already over when the log replayed claims no duration', async () => {
+  // The reason this matters: no Frame carries a timestamp, so the only clock
+  // is this screen's own. On a reload the whole log lands at once, and a
+  // Thread that took four minutes would read `0s` — a number that looks
+  // measured and is not. It has to be absent instead.
+  const fake = fakeSse()
+  const first = await mount(fake, {}, { clock: byHand() })
+  await act(async () => {
+    fake.frame(opens('toolu_task', 'audit core', 'Explore'))
+    fake.frame({ kind: 'tool-result', id: 'toolu_task', output: 'no findings', isError: false })
+  })
+  expect(meter('toolu_task').dataset['threadState']).toBe('settled')
+  first.unmount()
+
+  // A fresh page: the same log, replayed from 0 into a screen that never
+  // watched any of it happen.
+  const reloaded = await mount(fake, {}, { clock: byHand() })
+  expect(meter('toolu_task').dataset['threadState']).toBe('settled')
+  expect(elapsed('toolu_task')).toBeUndefined()
+  reloaded.unmount()
+})
+
+test('a Thread can be filtered out, and the main agent’s own work is what is left', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake, {}, { threads: 'hidden' })
+
+  await act(async () => {
+    for (const frame of golden) fake.frame(frame)
+  })
+
+  const expected = reduce(golden)
+  const hidden = expected.messages.filter((message) => 'thread' in message && message.thread)
+  expect(hidden.length).toBeGreaterThan(0)
+  // Exactly the Thread's Messages are gone and nothing else is: a filter that
+  // took the `Task` call with them, or that took a Message belonging to no
+  // Thread, would miss this by the count.
+  expect(drawn()).toBe(expected.messages.length - hidden.length)
+  expect(document.querySelectorAll('[data-thread]').length).toBe(0)
+  // The `Task` call stays: it is the main agent's own work, not the Thread's.
+  expect(there(screen.queryByText('Task'))).toBe(true)
+  view.unmount()
+})
+
+test('a Thread can be nested under the Task call that opened it, losing nothing', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake, {}, { threads: 'nested' })
+
+  await act(async () => {
+    for (const frame of golden) fake.frame(frame)
+  })
+
+  const expected = reduce(golden)
+  // Fewer top-level entries than Messages, because the Thread's work moved
+  // under its opener — and every Message still on screen, because moving is
+  // not the same as dropping.
+  expect(drawn()).toBeLessThan(expected.messages.length)
+  expect(document.querySelectorAll('[data-thread]').length).toBeGreaterThan(0)
+  expect(document.querySelectorAll('[data-tool], [data-thread], [data-opens]').length).toBeGreaterThan(0)
+  const nest = document.querySelector('[data-thread-nest]')
+  expect(there(nest)).toBe(true)
+  // The Thread's work is inside its opener, not merely after it.
+  expect(nest?.closest('[data-opens="toolu_task"]')).not.toBeNull()
+  expect(nest?.querySelectorAll('[data-thread="toolu_task"]').length).toBe(
+    expected.messages.filter((message) => 'thread' in message && message.thread === 'toolu_task')
+      .length,
+  )
   view.unmount()
 })
 
@@ -847,6 +969,57 @@ function entryFor(tool: string): HTMLElement {
   return found
 }
 
+/** A `Task` call, which is the only thing that opens a Thread. */
+function opens(id: string, description: string, subagentType: string): Frame {
+  return {
+    kind: 'tool-call',
+    id,
+    name: 'Task',
+    input: { description, subagent_type: subagentType, prompt: description },
+    opens: { thread: id, description, subagentType },
+  }
+}
+
+/** One Thread's meter. */
+function meter(thread: string): HTMLElement {
+  const found = document.querySelector<HTMLElement>(`[data-thread-meter="${thread}"]`)
+  if (!found) throw new Error(`no meter for ${thread}`)
+  return found
+}
+
+/** What a Thread's meter says it has been running for, if it says anything. */
+function elapsed(thread: string): string | undefined {
+  return meter(thread).querySelector('[data-thread-elapsed]')?.textContent ?? undefined
+}
+
+/** How many entries the Transcript is drawing at the top level. */
+function drawn(): number {
+  return screen.getByRole('log').children.length
+}
+
+/**
+ * A clock a test moves itself. The meter's duration is the one number on
+ * screen that comes from a clock rather than from a Frame, so the clock is
+ * injectable for the same reason the transport is.
+ */
+function byHand(): ThreadClock & { advance(ms: number): Promise<void> } {
+  let at = 0
+  const ticking = new Set<() => void>()
+  return {
+    now: () => at,
+    tick: (onTick) => {
+      ticking.add(onTick)
+      return () => ticking.delete(onTick)
+    },
+    advance: async (ms) => {
+      at += ms
+      await act(async () => {
+        for (const onTick of [...ticking]) onTick()
+      })
+    },
+  }
+}
+
 
 const endpoint = 'http://localhost/agent'
 
@@ -857,6 +1030,7 @@ const golden = goldenLog as Frame[]
 async function mount(
   fake: FakeSse,
   options: Partial<AgentSessionOptions> = {},
+  props: { threads?: ThreadDisplay; clock?: ThreadClock } = {},
 ): Promise<{ unmount(): void }> {
   function Host() {
     const session = useAgentSession({
@@ -864,7 +1038,7 @@ async function mount(
       createEventSource: fake.createEventSource,
       ...options,
     })
-    return <ClaudeSession session={session} />
+    return <ClaudeSession session={session} {...props} />
   }
   const view = render(<Host />)
   await settle()

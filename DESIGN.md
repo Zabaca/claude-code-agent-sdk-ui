@@ -52,6 +52,17 @@ in Brainless as it stands:
   and is easy to not read. Without it, three background agents' tool calls land
   in the transcript indistinguishable from the main thread's. Forge's ADR-0018
   exists for exactly this.
+- **A sub-agent says nothing unless you ask.** `forwardSubagentText` is off by
+  default, and with it off the SDK emits only a sub-agent's `tool_use` and
+  `tool_result` blocks — "enough for a heartbeat counter", in its own words. So
+  every Thread surface shows what a sub-agent *did* and never what it was doing
+  it for, and nothing fails: the transcript simply has a hole in it shaped like
+  the reason. Forge hit this. Turning it on is only safe **after** attribution
+  works, because forwarding puts three sub-agents' prose and thinking on the
+  same path as the agent's own — and a block identified by its index alone then
+  grows whichever bubble was last opened, landing a background agent's words
+  inside the answer to the person. A block must be keyed by its Thread as well
+  as its index, on the server and again in the hook.
 - **Compaction boundaries.** When context is compacted the transcript looks
   identical before and after, while what the agent can actually *see* has been
   replaced by a summary. A divergence that arrives through normal operation is

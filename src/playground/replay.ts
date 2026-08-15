@@ -181,20 +181,29 @@ export function tool(call: {
   output: string
   failed?: boolean
   takes?: number
+  /** The Thread that ran it; absent for the agent's own work. */
+  thread?: string
 }): Beat[] {
   return [
     {
       after: 260,
-      frame: { kind: 'tool-call', id: call.id, name: call.name, input: call.input },
+      frame: compact<Frame>({
+        kind: 'tool-call',
+        id: call.id,
+        name: call.name,
+        input: call.input,
+        thread: call.thread,
+      }),
     },
     {
       after: call.takes ?? 700,
-      frame: {
+      frame: compact<Frame>({
         kind: 'tool-result',
         id: call.id,
         output: call.output,
         isError: call.failed === true,
-      },
+        thread: call.thread,
+      }),
     },
   ]
 }
@@ -217,6 +226,130 @@ const COMMANDS: SlashCommandInfo[] = [
 ]
 
 /**
+ * The `Task` call that opens a Thread. Kept apart from `tool` because a Thread
+ * is only interesting while it is open: the three run at once, so their calls
+ * all stand pending while their work arrives, and each is answered by
+ * `threadEnded` in its own time rather than paired with its own call.
+ */
+export function opensThread(open: {
+  thread: string
+  description: string
+  subagentType: string
+}): Beat {
+  return {
+    after: 200,
+    frame: {
+      kind: 'tool-call',
+      id: open.thread,
+      name: 'Task',
+      input: {
+        description: open.description,
+        subagent_type: open.subagentType,
+        prompt: `${open.description}, and report what you find`,
+      },
+      opens: {
+        thread: open.thread,
+        description: open.description,
+        subagentType: open.subagentType,
+      },
+    },
+  }
+}
+
+/** A Thread reporting back, which is what stops its meter. */
+export function threadEnded(thread: string, report: string, failed = false): Beat {
+  return {
+    after: 600,
+    frame: { kind: 'tool-result', id: thread, output: report, isError: failed },
+  }
+}
+
+/**
+ * The Thread case: three Threads open at once, their work arriving
+ * interleaved, and each finishing in its own time.
+ *
+ * One Thread would demonstrate nothing. The whole trap is that three
+ * background agents' tool calls land in the Transcript indistinguishable from
+ * the main agent's — so the case has to be three of them, running over each
+ * other, with the main agent still doing work of its own in the middle of it.
+ * The third fails, because a Thread that came back empty-handed reading like
+ * one that succeeded is the same lie in a smaller place.
+ */
+const THREE_THREADS: Beat[] = [
+  { after: 900, frame: { kind: 'prompt', text: 'audit the three packages in parallel' } },
+  ...prose('Opening a Thread per package.', { block: 7 }),
+  opensThread({ thread: 'toolu_task_core', description: 'audit core', subagentType: 'Explore' }),
+  opensThread({ thread: 'toolu_task_ui', description: 'audit ui', subagentType: 'Explore' }),
+  opensThread({
+    thread: 'toolu_task_server',
+    description: 'audit server',
+    subagentType: 'general-purpose',
+  }),
+  // A Thread saying what it is doing, which only arrives at all because the
+  // handler asks for it (#19). Block 0 — the same index the main agent's own
+  // prose uses, because the index counts blocks within a message and each
+  // agent is writing its own. Two blocks share an index here and stay apart,
+  // which is the thing that made forwarding safe to turn on.
+  ...prose('Checking whether reduce touches a clock.', { block: 0, thread: 'toolu_task_core' }),
+  // Interleaved on purpose: read down the Transcript and these four calls
+  // arrive in an order no single agent could have produced.
+  ...tool({
+    id: 'toolu_core_read',
+    name: 'Read',
+    input: { file_path: '/repo/src/core/reduce.ts' },
+    output: 'export function reduce(frames, options = {}) {',
+    thread: 'toolu_task_core',
+    takes: 500,
+  }),
+  ...tool({
+    id: 'toolu_ui_grep',
+    name: 'Grep',
+    input: { pattern: '#[0-9a-f]{6}' },
+    output: 'no matches',
+    thread: 'toolu_task_ui',
+    takes: 400,
+  }),
+  ...tool({
+    id: 'toolu_server_bash',
+    name: 'Bash',
+    input: { command: 'bun test src/server' },
+    output: '31 pass\n0 fail',
+    thread: 'toolu_task_server',
+    takes: 700,
+  }),
+  ...tool({
+    id: 'toolu_core_grep',
+    name: 'Grep',
+    input: { pattern: 'Date.now' },
+    output: 'no matches — core has no clock',
+    thread: 'toolu_task_core',
+    takes: 450,
+  }),
+  // Two windows reported in the same breath, and the whole of #17 on screen:
+  // the Thread's 7.4k is drawn on the Thread's meter and the main agent's 186k
+  // is not, where before either would have overwritten the other.
+  { after: 200, frame: { kind: 'context', thread: 'toolu_task_core', totalTokens: 7400 } },
+  { frame: { kind: 'context', totalTokens: 186000, maxTokens: 200000, percentage: 93 } },
+  // The main agent is still working while they run, which is what makes
+  // attribution worth anything: this line is nobody's Thread.
+  ...prose('Two are back; the third is still reading.', { block: 8 }),
+  threadEnded('toolu_task_ui', 'ui: no hardcoded hex left.'),
+  threadEnded('toolu_task_core', 'core: pure, no clock, no socket.'),
+  ...tool({
+    id: 'toolu_server_read',
+    name: 'Read',
+    input: { file_path: '/repo/src/server/handler.ts' },
+    output: 'Error: file was moved',
+    failed: true,
+    thread: 'toolu_task_server',
+    takes: 600,
+  }),
+  threadEnded('toolu_task_server', 'server: could not finish — the handler moved.', true),
+  ...prose('Two clean, one came back empty-handed.', { block: 9 }),
+  { frame: { kind: 'settled', result: 'Two packages audited; the third could not finish.' } },
+]
+
+/**
  * The opening script. Scoped to what is drawn end to end — a replay log that
  * showed a surface nothing draws yet would be a demo of an absence — and each
  * ticket adds its own case as it earns one.
@@ -226,7 +359,10 @@ const COMMANDS: SlashCommandInfo[] = [
  * the same before and after while what the agent can actually see has changed.
  * They are the hardest thing here to believe without seeing, because the
  * failure they exist to stop looks like nothing at all — so the playground
- * plays them rather than describing them.
+ * plays them rather than describing them. Last comes the Thread case, for the
+ * failure that looks like nothing at all in the other direction: three
+ * background agents' work landing in the Transcript as though the main agent
+ * had done all of it.
  */
 export const OPENING: Beat[] = [
   { frame: { kind: 'session', sessionId: 'replay-0001' } },
@@ -359,6 +495,10 @@ export const OPENING: Beat[] = [
   { after: 400, frame: { kind: 'prompt', text: 'start again from the failing test' } },
   ...prose('Fresh context. Reading the failing test.', { block: 6 }),
   { frame: { kind: 'settled', result: 'Read it.', turns: 1 } },
+
+  // --- the Threads -------------------------------------------------------------
+
+  ...THREE_THREADS,
 ]
 
 /**

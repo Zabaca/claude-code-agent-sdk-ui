@@ -1,6 +1,7 @@
 import type { Frame } from './frame.ts'
 import type {
   CompactedMessage,
+  ContextUsage,
   HookMessage,
   ImageMessage,
   Message,
@@ -37,6 +38,8 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
   const calls = new Map<string, number>()
   /** Where each identified hook sits, so its later Frames patch one Message. */
   const hooks = new Map<string, number>()
+  /** Each Thread's own context window, kept off the Session's meter. */
+  const threadContext: Record<string, ContextUsage> = {}
   let turn: Turn = { status: 'idle' }
 
   for (const frame of frames) {
@@ -76,6 +79,18 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
           }),
         )
         break
+      case 'tool-progress': {
+        // Patches the call it is about, exactly as a result does, and for the
+        // same reason: progress is more said about one call, not a second
+        // entry in the Transcript. A progress Frame whose call is absent has
+        // nothing to attach to — a log truncated before the call — and is
+        // dropped rather than conjuring one.
+        const at = calls.get(frame.id)
+        const call = at === undefined ? undefined : messages[at]
+        if (at === undefined || call?.kind !== 'tool-call') break
+        messages[at] = { ...call, elapsedSeconds: frame.elapsedSeconds }
+        break
+      }
       case 'tool-result': {
         const at = calls.get(frame.id)
         const call = at === undefined ? undefined : messages[at]
@@ -122,7 +137,11 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
         break
       case 'context': {
         const { kind, ...context } = frame
-        state.context = context
+        // Whose window this is decides which meter it lands on. A Thread's
+        // reading written to the Session's meter is the screen reporting a
+        // number that is not about the thing it is drawn next to (#17).
+        if (context.thread === undefined) state.context = context
+        else threadContext[context.thread] = context
         break
       }
       case 'rate-limit': {
@@ -247,7 +266,7 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
     }
   }
 
-  return { ...compact<SessionState>(state), messages, turn }
+  return { ...compact<SessionState>(state), messages, turn, threadContext }
 }
 
 /** What `reduce` reads besides the Frames. */
@@ -259,8 +278,13 @@ export type ReduceOptions = {
   reasoning?: boolean
 }
 
-/** The parts of a Transcript that are Session-wide facts, not Messages. */
-type SessionState = Omit<Transcript, 'messages' | 'turn'>
+/**
+ * The parts of a Transcript that are Session-wide facts, not Messages.
+ * `threadContext` is built alongside rather than here, because it is always
+ * present — an empty record is "no Thread reported a window", which a viewer
+ * can read without a null check.
+ */
+type SessionState = Omit<Transcript, 'messages' | 'turn' | 'threadContext'>
 
 /**
  * The runtime's two terminal reasons for an abort. A Turn that ends this way

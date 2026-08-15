@@ -86,6 +86,14 @@
     "thread": "toolu_task"
   },
   {
+    "kind": "context",
+    "thread": "toolu_task",
+    "model": "claude-haiku-4",
+    "totalTokens": 7000,
+    "maxTokens": 200000,
+    "percentage": 4
+  },
+  {
     "kind": "tool-call",
     "id": "toolu_read",
     "name": "Read",
@@ -100,6 +108,14 @@
     "output": "export const a = 1",
     "isError": false,
     "thread": "toolu_task"
+  },
+  {
+    "kind": "tool-progress",
+    "id": "toolu_task",
+    "name": "Task",
+    "elapsedSeconds": 12,
+    "subagentType": "code-reviewer",
+    "heartbeat": true
   },
   {
     "kind": "hook",

@@ -29,6 +29,26 @@ export {
  */
 export { ClaudeSession } from "./session.tsx";
 export { ClaudeSlashMenu, type SlashCommand } from "./claude-slash-menu.tsx";
+/**
+ * Threads, for a host that draws its own Transcript rather than using
+ * `ClaudeSession`. `arrange` is the flat-Transcript decision the spec leaves to
+ * the renderer — inline, nested or filtered out — and `useThreads` is the meter
+ * behind it. Ours, like `ClaudeSession`, and for the same reason.
+ */
+export {
+  arrange,
+  REAL_CLOCK,
+  ThreadMeters,
+  ThreadTag,
+  threadsOf,
+  useThreads,
+  type Arranged,
+  type ThreadClock,
+  type ThreadDisplay,
+  type ThreadReading,
+  type ThreadSource,
+  type ThreadState,
+} from "./thread.tsx";
 export { ClaudeThinking } from "./claude-thinking.tsx";
 export { ClaudeTodoList, type Todo } from "./claude-todo-list.tsx";
 export { ClaudeToolCall } from "./claude-tool-call.tsx";

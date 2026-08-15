@@ -15,10 +15,12 @@ test('replay drives the whole container with no credential and no network', asyn
   // Prose the agent "wrote", a tool that answered, and a tool that failed —
   // what a reviewer is meant to be able to see in seconds.
   expect(screen.getByText('Reading the test first.')).toBeDefined()
-  expect(statuses('Read')).toEqual(['success'])
+  // The main agent's own read, then the two the Threads ran — the second of
+  // which failed, which is why the third status is not a success.
+  expect(statuses('Read')).toEqual(['success', 'success', 'error'])
   // The failing run, then the passing one — a status that is read off the
   // line rather than only coloured.
-  expect(statuses('Bash')).toEqual(['error', 'success'])
+  expect(statuses('Bash')).toEqual(['error', 'success', 'success'])
   // The Turn ended, so the working line is gone.
   expect(there(screen.queryByRole('status'))).toBe(false)
   view.unmount()
@@ -126,6 +128,48 @@ test('a reload replays the log, because every Frame carries its index', async ()
   second.unmount()
 })
 
+test('replay shows three Threads running at once, told apart and metered', async () => {
+  const replay = replayTransport({ wait: immediately })
+  const view = await mount(replay)
+  await drain(replay)
+
+  // Three Threads, each saying what it was asked to do and what kind of agent
+  // did it — and each with its own tool count, which is the assertion a script
+  // that opened one Thread and drew it three times could not pass.
+  expect(metered()).toEqual([
+    { thread: 'toolu_task_core', state: 'settled', toolCalls: 2 },
+    { thread: 'toolu_task_ui', state: 'settled', toolCalls: 1 },
+    { thread: 'toolu_task_server', state: 'failed', toolCalls: 2 },
+  ])
+
+  // Every tool call the Threads ran is attributed to the Thread that ran it,
+  // and the main agent's own work — the three `Task` calls and the first
+  // Turn's five tools — is attributed to none of them.
+  expect(attributed()).toEqual({
+    toolu_task_core: 2,
+    toolu_task_ui: 1,
+    toolu_task_server: 2,
+  })
+  // And each meter says, in words, what its Thread was asked to do and what
+  // kind of agent did it.
+  expect(reads('toolu_task_server')).toContain('audit server')
+  expect(reads('toolu_task_server')).toContain('general-purpose')
+  expect(reads('toolu_task_ui')).toContain('audit ui')
+
+  // The Thread that reported a window shows it; the two that did not show no
+  // figure — not a zero, and not the main agent's 186k borrowed as theirs.
+  expect(reads('toolu_task_core')).toContain('7.4k context')
+
+  // A Thread's own prose, on screen and attributed. Without the handler asking
+  // for it (#19) this line would not exist at all, and the playground would be
+  // demonstrating the heartbeat-counter view it was built to replace.
+  const spoke = screen.getByText('Checking whether reduce touches a clock.')
+  expect(spoke.closest<HTMLElement>('[data-thread]')?.dataset['thread']).toBe('toolu_task_core')
+  expect(reads('toolu_task_ui')).not.toContain('context')
+  expect(reads('toolu_task_ui')).not.toContain('186k')
+  view.unmount()
+})
+
 test('the opening log shows prose and a tool call in every state it has', async () => {
   // A guard for the tickets that add their own case here: trimming the script
   // to prose would quietly turn the demo into a demo of less.
@@ -151,8 +195,9 @@ test('the opening log plays every divergence, and each reaches the screen', asyn
   // the agent can see has changed. A playground that played none of them would
   // demonstrate the screen at its most convincing and least honest.
   expect(marks()).toEqual(['recall', 'hook', 'compacted', 'reset'])
-  // And a Turn that died, beside the two that did not.
-  expect(outcomes()).toEqual(['settled', 'failed', 'settled'])
+  // And a Turn that died, beside the three that did not — the last of which
+  // is the Thread case appended after the divergences.
+  expect(outcomes()).toEqual(['settled', 'failed', 'settled', 'settled'])
 
   const said = screen.getByRole('log').textContent ?? ''
   expect(said).toContain('180,000')
@@ -265,6 +310,32 @@ function statuses(tool: string): (string | undefined)[] {
     .queryAllByText(tool)
     .map((found) => found.closest('details')?.dataset['status'])
     .filter((status): status is string => status !== undefined)
+}
+
+/** What each Thread meter claims, in the order the Threads were opened. */
+function metered(): { thread: string; state: string; toolCalls: number }[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-thread-meter]')].map((one) => ({
+    thread: one.dataset['threadMeter'] ?? '',
+    state: one.dataset['threadState'] ?? '',
+    toolCalls: Number(one.dataset['threadTools']),
+  }))
+}
+
+/** What one Thread's meter reads. */
+function reads(thread: string): string {
+  const found = document.querySelector(`[data-thread-meter="${thread}"]`)
+  if (!found) throw new Error(`no meter for ${thread}`)
+  return found.textContent ?? ''
+}
+
+/** How many tool calls the Transcript attributes to each Thread. */
+function attributed(): Record<string, number> {
+  const counted: Record<string, number> = {}
+  for (const entry of document.querySelectorAll<HTMLElement>('[data-tool][data-thread]')) {
+    const thread = entry.dataset['thread'] ?? ''
+    counted[thread] = (counted[thread] ?? 0) + 1
+  }
+  return counted
 }
 
 /** Whether something is on screen. See the note in `ui/session.test.tsx`. */

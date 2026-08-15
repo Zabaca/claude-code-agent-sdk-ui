@@ -27,6 +27,7 @@ import type {
   ThreadOpened,
   TokenUsage,
   ToolCallFrame,
+  ToolProgressFrame,
   ToolResultFrame,
 } from './frame.ts'
 
@@ -63,6 +64,8 @@ export function classify(message: ClassifyInput): Frame[] {
       return person(m)
     case 'result':
       return outcome(m)
+    case 'tool_progress':
+      return toolProgress(m)
     case 'conversation_reset': {
       const transcriptId = str(m['new_conversation_id'])
       return transcriptId === undefined ? [] : [{ kind: 'reset', transcriptId }]
@@ -77,7 +80,11 @@ export function classify(message: ClassifyInput): Frame[] {
 function agent(m: Rec): Frame[] {
   const thread = str(m['parent_tool_use_id'])
 
-  return [...spoken(m, thread), ...contextUsage(m['context_usage'])]
+  // The Thread reaches the context reading as well as the prose: an assistant
+  // message names one Thread, and everything hanging off it belongs to that
+  // Thread. Handing it only to `spoken` is what made a sub-agent's window read
+  // as the Session's (#17).
+  return [...spoken(m, thread), ...contextUsage(m['context_usage'], thread)]
 }
 
 function spoken(m: Rec, thread: string | undefined): Frame[] {
@@ -284,6 +291,32 @@ function textIn(content: unknown): string {
     .join('\n')
 }
 
+/**
+ * The runtime's live word on a call that has not answered yet.
+ *
+ * Emitted rather than dropped because it is the only place the wire says how
+ * long something has been running. On a `Task` call that is how long a Thread
+ * has been going — which nothing else reports, and which a renderer would
+ * otherwise have to guess from when it happened to start watching.
+ */
+function toolProgress(m: Rec): Frame[] {
+  const id = str(m['tool_use_id'])
+  const name = str(m['tool_name'])
+  const elapsedSeconds = num(m['elapsed_time_seconds'])
+  if (id === undefined || name === undefined || elapsedSeconds === undefined) return []
+  return [
+    compact<ToolProgressFrame>({
+      kind: 'tool-progress',
+      id,
+      name,
+      elapsedSeconds,
+      thread: str(m['parent_tool_use_id']),
+      subagentType: str(m['subagent_type']),
+      heartbeat: m['heartbeat'] === true ? true : undefined,
+    }),
+  ]
+}
+
 /** A Thread is the line of work opened by a `Task` call. */
 function opensThread(toolName: string): boolean {
   return toolName === 'Task'
@@ -385,7 +418,7 @@ function rateLimit(value: unknown): Frame[] {
 }
 
 /** The structured twin of the /context report, when the SDK attaches one. */
-function contextUsage(value: unknown): Frame[] {
+function contextUsage(value: unknown, thread: string | undefined): Frame[] {
   const usage = record(value)
   const totalTokens = usage && num(usage['total_tokens'])
   if (!usage || totalTokens === undefined) return []
@@ -395,6 +428,7 @@ function contextUsage(value: unknown): Frame[] {
   return [
     compact<ContextFrame>({
       kind: 'context',
+      thread,
       model: str(usage['model']),
       totalTokens,
       maxTokens: num(usage['raw_max_tokens']),

@@ -146,6 +146,188 @@ test('a skill discovered mid-Session is in the menu without a reload', async () 
   view.unmount()
 })
 
+test('three concurrent Threads stay apart, and none of their work becomes the main agent’s', async () => {
+  // The trap this whole ticket exists for, driven through the real wire: the
+  // SDK says whose work a message is with `parent_tool_use_id`, and only the
+  // composition can show that the id survives classify, the handler's SSE
+  // framing, the hook and `reduce` all the way onto the screen.
+  const sdk = fakeQuery()
+  const view = await mount(createAgentHandler({ createQuery: sdk.createQuery }))
+
+  await type('audit the three packages')
+  await enter()
+  await said(
+    sdk,
+    init('sess-threads'),
+    asked('audit the three packages'),
+    // One assistant message opening three Threads at once, which is how the
+    // runtime actually starts three background agents.
+    opening(
+      { id: 'toolu_task_core', description: 'audit core', subagent_type: 'Explore' },
+      { id: 'toolu_task_ui', description: 'audit ui', subagent_type: 'Explore' },
+      { id: 'toolu_task_server', description: 'audit server', subagent_type: 'general-purpose' },
+    ),
+  )
+
+  // Their work arrives interleaved, as three agents running at once produce it.
+  await said(
+    sdk,
+    inThread('toolu_task_core', uses('toolu_c1', 'Read', { file_path: '/repo/core/reduce.ts' })),
+    inThread('toolu_task_ui', uses('toolu_u1', 'Grep', { pattern: 'cc:flex' })),
+    inThread('toolu_task_server', uses('toolu_s1', 'Bash', { command: 'bun test src/server' })),
+    inThread('toolu_task_core', uses('toolu_c2', 'Read', { file_path: '/repo/core/frame.ts' })),
+  )
+
+  // Every tool line the sub-agents ran is attributed to the Thread that ran it.
+  expect(threadOf('Grep')).toEqual(['toolu_task_ui'])
+  expect(threadOf('Bash')).toEqual(['toolu_task_server'])
+  expect(threadOf('Read')).toEqual(['toolu_task_core', 'toolu_task_core'])
+  // And the converse, which is the half that catches a Thread id dropped
+  // anywhere on the wire: the only tool calls that are the main agent's own
+  // are the three `Task` calls. Were `parent_tool_use_id` lost at any seam,
+  // these four would join them here.
+  expect(unattributed()).toEqual(['Task', 'Task', 'Task'])
+
+  // Each `Task` call names the Thread it opened, and wears the same marker
+  // that Thread's work wears — which is what makes the opener and the work it
+  // started read as one line of work rather than two unrelated things.
+  expect(opened()).toEqual(['toolu_task_core', 'toolu_task_ui', 'toolu_task_server'])
+  expect(marker('[data-opens="toolu_task_ui"]')).toBe('↳2')
+  expect(marker('[data-thread="toolu_task_ui"]')).toBe('↳2')
+
+  // Three meters, one per Thread, each saying what it was asked to do, what
+  // kind of agent is doing it, and how much it has done. Drawn from one Thread
+  // and repeated three times, the tool counts would not disagree.
+  expect(metered()).toEqual([
+    { thread: 'toolu_task_core', state: 'running', toolCalls: 2 },
+    { thread: 'toolu_task_ui', state: 'running', toolCalls: 1 },
+    { thread: 'toolu_task_server', state: 'running', toolCalls: 1 },
+  ])
+  expect(meter('toolu_task_ui')).toContain('audit ui')
+  expect(meter('toolu_task_server')).toContain('general-purpose')
+
+  // And told apart at a glance, not only by id: three Threads, three colours
+  // down the left edge. Drawn in one colour, a viewer would be back to reading
+  // `tool_use` ids off the DOM to know who did what — which is the state this
+  // surface exists to end.
+  expect(new Set(hues()).size).toBe(3)
+
+  // One Thread says how full its own window is. That reading rides on an
+  // assistant message carrying the Thread's id, so this is also the whole of
+  // #17 driven through the real wire: the number has to land on the Thread it
+  // belongs to and nowhere else.
+  // The main agent reports its own window in the same breath, and much fuller
+  // — which is the pair that makes this a real check. Before #17 the second of
+  // these two readings simply overwrote the first, whichever way round they
+  // arrived.
+  await said(sdk, holding('toolu_task_core', 7_400), holding(null, 190_000))
+  expect(meter('toolu_task_core')).toContain('7.4k context')
+  // And nothing is invented for the two that have not said. A zero would be
+  // the screen making up a number for a window it has never seen; the Session's
+  // 190k borrowed as theirs would be worse, because it looks like a reading.
+  expect(meter('toolu_task_ui')).not.toContain('context')
+  expect(meter('toolu_task_server')).not.toContain('context')
+  expect(meter('toolu_task_ui')).not.toContain('190k')
+
+  // One finishes. Its meter stops and reads as complete; the other two are
+  // still going, so a meter keyed to Turn state rather than to its own Thread
+  // would stop all three here.
+  await said(sdk, answered(null, 'toolu_task_ui', 'no findings in ui'))
+  expect(metered()).toEqual([
+    { thread: 'toolu_task_core', state: 'running', toolCalls: 2 },
+    { thread: 'toolu_task_ui', state: 'settled', toolCalls: 1 },
+    { thread: 'toolu_task_server', state: 'running', toolCalls: 1 },
+  ])
+
+  view.unmount()
+})
+
+test('with a Thread’s prose forwarded, the main agent’s words stay the main agent’s', async () => {
+  // #19's hazard, and the reason forwarding was only safe to turn on after
+  // attribution landed. With it off, nothing but the main agent ever streamed
+  // prose, so a block index alone identified a block. With it on, a sub-agent
+  // streams too — and both start at block 0, because the index counts blocks
+  // within a message and each is writing its own. Keyed by index alone, the
+  // two sentences below grow the same bubble: whichever delta arrives next
+  // appends to whatever the last one opened, and a background agent's words
+  // land in the middle of the agent's answer to the person.
+  //
+  // Driven through the real handler, because its folding is where that key is.
+  const sdk = fakeQuery()
+  const view = await mount(createAgentHandler({ createQuery: sdk.createQuery }))
+
+  await type('delegate the audit')
+  await enter()
+  await said(
+    sdk,
+    init('sess-forward'),
+    asked('delegate the audit'),
+    opening({ id: 'toolu_task_core', description: 'audit core', subagent_type: 'Explore' }),
+  )
+
+  // Both open a block 0 and write into it, alternating — which is what two
+  // agents talking at once actually puts on one stream.
+  await said(
+    sdk,
+    blockOpens(null, 0),
+    blockOpens('toolu_task_core', 0),
+    writes(null, 0, 'The audit'),
+    writes('toolu_task_core', 0, 'Reading'),
+    writes(null, 0, ' is running.'),
+    writes('toolu_task_core', 0, ' reduce.ts.'),
+  )
+
+  // Two lines, each whole, neither carrying a word of the other.
+  expect(screen.getAllByText('The audit is running.')).toHaveLength(1)
+  expect(screen.getAllByText('Reading reduce.ts.')).toHaveLength(1)
+
+  // And attribution is the half #19 could have broken: forwarding makes more
+  // messages carry `parent_tool_use_id`, so the risk runs both ways. The
+  // Thread's sentence belongs to the Thread; the main agent's belongs to no
+  // Thread at all and must not have acquired one.
+  expect(threadHolding('Reading reduce.ts.')).toBe('toolu_task_core')
+  expect(threadHolding('The audit is running.')).toBeUndefined()
+
+  // The whole Turn's worth: exactly one entry on screen is a Thread's, and it
+  // is none of the person's words, the `Task` call, or the agent's answer. A
+  // blanket attribution would sweep those up and still pass the two
+  // assertions above.
+  expect(document.querySelectorAll('[data-thread]')).toHaveLength(1)
+
+  view.unmount()
+})
+
+test('a Thread reports its own progress, and the meter prefers the runtime’s clock to its own', async () => {
+  // `tool_progress` is the SDK's live word on a call still running — and for a
+  // `Task` call, that call *is* the Thread. It carries an elapsed time the
+  // runtime measured, which is the one thing this renderer could not know:
+  // with no timestamp on any other Frame, a Thread joined mid-flight was timed
+  // from first sight and could only ever be a lower bound.
+  const sdk = fakeQuery()
+  const view = await mount(createAgentHandler({ createQuery: sdk.createQuery }))
+
+  await type('delegate the audit')
+  await enter()
+  await said(
+    sdk,
+    init('sess-progress'),
+    asked('delegate the audit'),
+    opening({ id: 'toolu_task_core', description: 'audit core', subagent_type: 'Explore' }),
+  )
+
+  // This screen has watched for no time at all and the runtime says the Thread
+  // is 95 seconds in — exactly what a reload mid-flight produces.
+  await said(sdk, progressing('toolu_task_core', 'Task', 95))
+
+  expect(meter('toolu_task_core')).toContain('1m 35s')
+  // Not the renderer's own answer, which is `0s` here. A meter that ignored
+  // the runtime's number would report a Thread a minute and a half in as one
+  // that had only just started.
+  expect(meter('toolu_task_core')).not.toContain('0s')
+
+  view.unmount()
+})
+
 // --- driving the seam ---------------------------------------------------------
 
 /** The command names the menu is offering, in the order it offers them. */
@@ -282,6 +464,161 @@ function outcomes(): (string | undefined)[] {
 
 function there(node: Element | null | undefined): boolean {
   return node !== null && node !== undefined
+}
+
+/** The Thread each of a tool's lines is attributed to, in Transcript order. */
+function threadOf(tool: string): (string | undefined)[] {
+  return [...document.querySelectorAll<HTMLElement>(`[data-tool="${tool}"]`)].map(
+    (entry) => entry.dataset['thread'],
+  )
+}
+
+/** Every tool call the screen says is the main agent's own, in order. */
+function unattributed(): string[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-tool]')]
+    .filter((entry) => entry.dataset['thread'] === undefined)
+    .map((entry) => entry.dataset['tool'] ?? '')
+}
+
+/** The Thread each `Task` call says it opened, in Transcript order. */
+function opened(): (string | undefined)[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-opens]')].map(
+    (entry) => entry.dataset['opens'],
+  )
+}
+
+/** The Thread marker an entry wears — the short thing a reader matches on. */
+function marker(selector: string): string {
+  const found = document.querySelector(selector)
+  if (!found) throw new Error(`nothing matching ${selector}`)
+  return found.querySelector('[aria-hidden]')?.textContent ?? ''
+}
+
+/** The colour each attributed entry is marked with, in Transcript order. */
+function hues(): string[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-thread]')].map(
+    (entry) => entry.getAttribute('style') ?? '',
+  )
+}
+
+/** What each Thread meter claims, in the order the Threads were opened. */
+function metered(): { thread: string; state: string; toolCalls: number }[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-thread-meter]')].map((one) => ({
+    thread: one.dataset['threadMeter'] ?? '',
+    state: one.dataset['threadState'] ?? '',
+    toolCalls: Number(one.dataset['threadTools']),
+  }))
+}
+
+/** What one Thread's meter reads, for the parts that are words. */
+function meter(thread: string): string {
+  const found = document.querySelector(`[data-thread-meter="${thread}"]`)
+  if (!found) throw new Error(`no meter for ${thread}`)
+  return found.textContent ?? ''
+}
+
+/** An assistant message opening several Threads at once — one `Task` each. */
+function opening(
+  ...tasks: { id: string; description: string; subagent_type: string }[]
+): ClassifyInput {
+  return {
+    type: 'assistant',
+    parent_tool_use_id: null,
+    message: {
+      role: 'assistant',
+      content: tasks.map((task) => ({
+        type: 'tool_use',
+        id: task.id,
+        name: 'Task',
+        input: {
+          description: task.description,
+          subagent_type: task.subagent_type,
+          prompt: `Audit and report: ${task.description}`,
+        },
+      })),
+    },
+  }
+}
+
+/**
+ * A Thread reporting how full its own window is. The SDK hangs `context_usage`
+ * off an assistant message, and that message names the Thread — which is what
+ * makes a per-Thread token figure possible at all.
+ */
+function holding(thread: string | null, totalTokens: number): ClassifyInput {
+  return {
+    type: 'assistant',
+    parent_tool_use_id: thread,
+    message: { role: 'assistant', content: [] },
+    context_usage: {
+      model: 'claude-haiku-4',
+      total_tokens: totalTokens,
+      raw_max_tokens: 200000,
+    },
+  }
+}
+
+/** The Thread the entry holding these exact words belongs to, if any. */
+function threadHolding(text: string): string | undefined {
+  return screen.getByText(text).closest<HTMLElement>('[data-thread]')?.dataset['thread']
+}
+
+/**
+ * A block opening on the stream. `parent_tool_use_id` is what says whose block
+ * it is — and with a Thread's prose forwarded, two of them are open at once.
+ */
+function blockOpens(thread: string | null, index: number): ClassifyInput {
+  return {
+    type: 'stream_event',
+    parent_tool_use_id: thread,
+    event: { type: 'content_block_start', index, content_block: { type: 'text', text: '' } },
+  }
+}
+
+/** More of a block, as it is written. */
+function writes(thread: string | null, index: number, text: string): ClassifyInput {
+  return {
+    type: 'stream_event',
+    parent_tool_use_id: thread,
+    event: { type: 'content_block_delta', index, delta: { type: 'text_delta', text } },
+  }
+}
+
+/** The runtime's live word on a call still running, and how long it has been. */
+function progressing(id: string, name: string, seconds: number): ClassifyInput {
+  return {
+    type: 'tool_progress',
+    tool_use_id: id,
+    tool_name: name,
+    parent_tool_use_id: null,
+    elapsed_time_seconds: seconds,
+    subagent_type: 'Explore',
+  }
+}
+
+/** What the runtime says for work done inside a Thread. */
+function inThread(thread: string, block: Record<string, unknown>): ClassifyInput {
+  return {
+    type: 'assistant',
+    parent_tool_use_id: thread,
+    message: { role: 'assistant', content: [block] },
+  }
+}
+
+function uses(id: string, name: string, input: Record<string, unknown>): Record<string, unknown> {
+  return { type: 'tool_use', id, name, input }
+}
+
+/** A tool answering. `thread` is null for the main agent's own calls. */
+function answered(thread: string | null, id: string, output: string): ClassifyInput {
+  return {
+    type: 'user',
+    parent_tool_use_id: thread,
+    message: {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: output }] }],
+    },
+  }
 }
 
 // --- SDK messages the fake yields ---------------------------------------------
