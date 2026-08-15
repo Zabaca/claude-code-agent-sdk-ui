@@ -177,6 +177,16 @@ test('a Turn that died is not drawn like a Turn that finished', async () => {
   expect(failed).toContain('failed')
   expect(failed).toContain('ran out of turns')
   expect(failed).toContain('error_max_turns')
+
+  // Told apart without reading, too. #7 drew the words apart; drawn in the
+  // same colour, the only thing separating an answer that died from one that
+  // finished is a word at the end of a scrolled-past line.
+  expect(entry(1).style.color).toBe('var(--cc-error)')
+  expect(entry(0).style.color).not.toBe('var(--cc-error)')
+
+  // And the Turn stopped: a working line still spinning under a Turn that
+  // died says the agent is still on it, which is the same lie in motion.
+  expect(there(screen.queryByRole('status'))).toBe(false)
   view.unmount()
 })
 
@@ -203,6 +213,35 @@ test('an interrupted Turn reads as an ending, not as an error', async () => {
   expect(entry(0).style.color).not.toBe('var(--cc-error)')
   // The runtime's account of the abort still gets read.
   expect(line).toContain('aborted by user')
+  view.unmount()
+})
+
+test('an interrupt leaves the Session idle on screen, not merely un-failed', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'write a novel' })
+  })
+  expect(screen.getByRole('status')).toBeDefined()
+
+  // The shape the handler actually produces: a *settled* Frame carrying the
+  // terminal reason. The other UI test drives the `failed` arm, so between
+  // them both branches of the predicate are exercised at this seam and neither
+  // can regress on its own.
+  await act(async () => {
+    fake.frame({ kind: 'settled', terminalReason: 'aborted_streaming' })
+  })
+
+  expect(outcomes()).toEqual(['interrupted'])
+  // Idle is a screen-level claim, not only a Turn field: the working line is
+  // gone, nothing is reported as a problem, and esc no longer wills an
+  // interrupt against a Turn that is not running.
+  expect(there(screen.queryByRole('status'))).toBe(false)
+  expect(there(screen.queryByRole('alert'))).toBe(false)
+  await act(async () => escape())
+  expect(wire.posted).toEqual([])
   view.unmount()
 })
 
@@ -309,6 +348,50 @@ test('a recall says what surfaced; one that surfaced nothing is correctly silent
   // still the screen taking up space for something it will not explain.
   const rows = [...screen.getByRole('log').children].map((row) => (row.textContent ?? '').trim())
   expect(rows).toEqual([said])
+  view.unmount()
+})
+
+test('a hook that refused is not drawn like a hook that passed', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({
+      kind: 'hook',
+      id: 'hook-1',
+      name: 'format-on-edit',
+      hookEvent: 'PostToolUse',
+      status: 'success',
+      output: 'formatted 2 files',
+    })
+    fake.frame({
+      kind: 'hook',
+      id: 'hook-2',
+      name: 'block-secrets',
+      hookEvent: 'PreToolUse',
+      status: 'error',
+      stderr: 'refused: .env is not readable',
+      exitCode: 2,
+    })
+  })
+
+  const [passed, refused] = markers('hook')
+  // Which hook, and at which lifecycle point: a hook that ran before a tool
+  // call and one that ran after it changed different things.
+  expect(passed).toContain('format-on-edit')
+  expect(passed).toContain('PostToolUse')
+  expect(refused).toContain('block-secrets')
+  expect(refused).toContain('PreToolUse')
+  // A hook that refused rewrote what the agent was allowed to do, and its own
+  // words are the only account of why. Dropped, the Transcript shows a tool
+  // call that simply did not happen and never says who stopped it.
+  expect(refused).toContain('refused: .env is not readable')
+  expect(refused).toContain('2')
+  // And told apart without reading: run and refused are not the same state.
+  expect(statusOf('hook', 1)).toBe('error')
+  expect(statusOf('hook', 0)).not.toBe('error')
+  expect(colourAt('hook', 1)).toBe('var(--cc-error)')
+  expect(colourAt('hook', 0)).not.toBe('var(--cc-error)')
   view.unmount()
 })
 
@@ -509,6 +592,28 @@ function colour(kind: string): string {
 /** How many divergence markers of a kind are on screen. */
 function divergences(kind: string): number {
   return document.querySelectorAll(`[data-divergence="${kind}"]`).length
+}
+
+/** What every marker of a kind says, in Transcript order. */
+function markers(kind: string): string[] {
+  return [...document.querySelectorAll(`[data-divergence="${kind}"]`)].map((one) =>
+    (one.textContent ?? '').trim(),
+  )
+}
+
+/** The nth marker of a kind, for what is read off it rather than out of it. */
+function marker(kind: string, at: number): HTMLElement {
+  const found = document.querySelectorAll<HTMLElement>(`[data-divergence="${kind}"]`)[at]
+  if (!found) throw new Error(`no ${kind} marker at ${at}`)
+  return found
+}
+
+function statusOf(kind: string, at: number): string | undefined {
+  return marker(kind, at).dataset['status']
+}
+
+function colourAt(kind: string, at: number): string {
+  return marker(kind, at).style.color
 }
 
 /** What a tool's collapsed line shows, minus what only a reader would hear. */

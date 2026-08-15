@@ -4,6 +4,7 @@ import * as React from 'react'
 
 import type {
   CompactedMessage,
+  HookMessage,
   Message,
   OutcomeMessage,
   RecallMessage,
@@ -116,9 +117,9 @@ export function ClaudeSession({
  *
  * The `switch` is exhaustive and the fallback is visible on purpose: a Message
  * kind this container has no chrome for yet is still an entry a viewer can
- * see, so a Transcript never silently drops something the agent said. The
- * remaining kinds get their real surfaces in the tickets named below; this is
- * what stands in until then, not what they should look like.
+ * see, so a Transcript never silently drops something the agent said. `image`
+ * gets its real surface in #12; that is what `Undrawn` stands in for, not what
+ * it should look like.
  */
 function Entry({ message }: { message: Message }) {
   const drawn = draw(message)
@@ -169,8 +170,9 @@ function draw(message: Message): React.ReactNode {
       // returns null still leaves behind the row it was drawn into — which is
       // a blank entry, not silence.
       return message.memories.length === 0 ? null : <Recall message={message} />
+    case 'hook':
+      return <Hook message={message} />
     case 'image': // #12
-    case 'hook': // #10
       return <Undrawn kind={message.kind} />
     default: {
       // Exhaustive at compile time — a kind added to the vocabulary has to be
@@ -260,6 +262,7 @@ function Marker({
   label,
   details = [],
   tone = 'var(--cc-fg-muted)',
+  status,
 }: {
   kind: string
   glyph: string
@@ -267,11 +270,14 @@ function Marker({
   /** Whatever the runtime actually gave. Anything missing is simply absent. */
   details?: (string | undefined)[]
   tone?: string
+  /** Where a marker has states of its own, as a hook does. */
+  status?: string
 }) {
   const said = details.filter((part): part is string => part !== undefined && part !== '')
   return (
     <div
       data-divergence={kind}
+      {...(status !== undefined ? { 'data-status': status } : {})}
       className="cc:flex cc:min-w-0 cc:flex-wrap cc:items-baseline cc:gap-2"
       style={{ color: tone }}
     >
@@ -354,6 +360,39 @@ function Recall({ message }: { message: RecallMessage }) {
 
 function from(memory: RecalledMemory): string {
   return memory.scope === undefined ? memory.path : `${memory.path} (${memory.scope})`
+}
+
+/**
+ * A hook firing, and what it said.
+ *
+ * A hook is the other party in the conversation: it runs on the agent's
+ * behalf, and one that refuses rewrites what the agent was allowed to do. Left
+ * silent, the Transcript shows a tool call that simply never happened and
+ * never says who stopped it — so a hook that errored is drawn as an error and
+ * keeps its own words, which are the only account of why.
+ *
+ * All three output channels are passed through rather than one being chosen:
+ * which of them a hook wrote to is the hook's business, and picking for it is
+ * how a refusal's reason goes missing.
+ */
+function Hook({ message }: { message: HookMessage }) {
+  const failed = message.status === 'error'
+  return (
+    <Marker
+      kind="hook"
+      glyph="⚑"
+      label={`Hook ${message.name} — ${message.status}`}
+      status={message.status}
+      details={[
+        message.hookEvent,
+        message.output,
+        message.stderr,
+        message.stdout,
+        message.exitCode === undefined ? undefined : `exit ${message.exitCode}`,
+      ]}
+      tone={failed ? 'var(--cc-error)' : 'var(--cc-fg-muted)'}
+    />
+  )
 }
 
 /**
