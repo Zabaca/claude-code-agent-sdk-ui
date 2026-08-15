@@ -188,6 +188,13 @@ test('three concurrent Threads stay apart, and none of their work becomes the ma
   // these four would join them here.
   expect(unattributed()).toEqual(['Task', 'Task', 'Task'])
 
+  // Each `Task` call names the Thread it opened, and wears the same marker
+  // that Thread's work wears — which is what makes the opener and the work it
+  // started read as one line of work rather than two unrelated things.
+  expect(opened()).toEqual(['toolu_task_core', 'toolu_task_ui', 'toolu_task_server'])
+  expect(marker('[data-opens="toolu_task_ui"]')).toBe('↳2')
+  expect(marker('[data-thread="toolu_task_ui"]')).toBe('↳2')
+
   // Three meters, one per Thread, each saying what it was asked to do, what
   // kind of agent is doing it, and how much it has done. Drawn from one Thread
   // and repeated three times, the tool counts would not disagree.
@@ -198,6 +205,12 @@ test('three concurrent Threads stay apart, and none of their work becomes the ma
   ])
   expect(meter('toolu_task_ui')).toContain('audit ui')
   expect(meter('toolu_task_server')).toContain('general-purpose')
+
+  // And told apart at a glance, not only by id: three Threads, three colours
+  // down the left edge. Drawn in one colour, a viewer would be back to reading
+  // `tool_use` ids off the DOM to know who did what — which is the state this
+  // surface exists to end.
+  expect(new Set(hues()).size).toBe(3)
 
   // One finishes. Its meter stops and reads as complete; the other two are
   // still going, so a meter keyed to Turn state rather than to its own Thread
@@ -362,6 +375,27 @@ function unattributed(): string[] {
   return [...document.querySelectorAll<HTMLElement>('[data-tool]')]
     .filter((entry) => entry.dataset['thread'] === undefined)
     .map((entry) => entry.dataset['tool'] ?? '')
+}
+
+/** The Thread each `Task` call says it opened, in Transcript order. */
+function opened(): (string | undefined)[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-opens]')].map(
+    (entry) => entry.dataset['opens'],
+  )
+}
+
+/** The Thread marker an entry wears — the short thing a reader matches on. */
+function marker(selector: string): string {
+  const found = document.querySelector(selector)
+  if (!found) throw new Error(`nothing matching ${selector}`)
+  return found.querySelector('[aria-hidden]')?.textContent ?? ''
+}
+
+/** The colour each attributed entry is marked with, in Transcript order. */
+function hues(): string[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-thread]')].map(
+    (entry) => entry.getAttribute('style') ?? '',
+  )
 }
 
 /** What each Thread meter claims, in the order the Threads were opened. */
