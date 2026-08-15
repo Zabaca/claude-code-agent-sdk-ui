@@ -421,6 +421,50 @@ test('replay resolves a handle it holds, and nothing at all for one it does not'
   }
 })
 
+test('a screenshot pasted into replay comes back as a picture in the Transcript', async () => {
+  const replay = replayTransport({ wait: immediately })
+  const view = await mount(replay)
+  await drain(replay)
+  const before = shownAs('pasted', { drawn: true })
+
+  const file = new File(['a screenshot'], 'image.png', { type: 'image/png' })
+  await act(async () => {
+    fireEvent.paste(composer(), { clipboardData: { files: [file], items: [] } })
+    await tick()
+  })
+  await act(async () => {
+    fireEvent.keyDown(composer(), { key: 'Enter' })
+    await tick()
+  })
+  await drain(replay)
+
+  // Live pushes the pictures to the SDK as content blocks, the SDK says the
+  // user message back, and `classify` reads an image block out of it — so a
+  // paste ends up on screen. Replay has to end up there too, or the playground
+  // is demonstrating something the product does not do.
+  //
+  // Breakage this fails on: replay reading `text` off the Event and ignoring
+  // `images`, which is what shipped — the tray showed the picture, the markers
+  // went into the words, the Turn ran, and the Transcript showed the sentence
+  // with nothing beside it.
+  expect(shownAs('pasted', { drawn: true })).toBe(before + 1)
+
+  // And by a handle, minted here, with the bytes staying here. A replay log
+  // that carried a payload would be a fixture of a wire the handler does not
+  // produce.
+  const minted = replay.log.filter(
+    (frame) => frame.kind === 'image' && frame.handle?.includes('minted'),
+  )
+  expect(minted).toHaveLength(1)
+  const picture = minted[0]
+  expect(picture?.kind === 'image' && picture.data).toBeUndefined()
+  expect(picture?.kind === 'image' && picture.url).toBeUndefined()
+  expect(picture?.kind === 'image' ? replay.imageSrc(picture.handle ?? '') : '').toBe(
+    `data:image/png;base64,${btoa('a screenshot')}`,
+  )
+  view.unmount()
+})
+
 test('what replay holds are pictures, not single pixels', () => {
   // The playground exists to show the surface, and a 1×1 pixel shows nothing
   // about how a picture is laid out. It was a 1×1 that made the stretched-image

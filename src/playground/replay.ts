@@ -63,6 +63,13 @@ export function replayTransport(options: ReplayOptions = {}): ReplayTransport {
 
   const log: Frame[] = []
   const listeners = new Map<string, ((event: { data: string; lastEventId: string }) => void)[]>()
+  /**
+   * The script's fixtures, plus whatever is pasted while the playground is
+   * open. Seeded from {@link HELD} rather than being it, so a paste mints into
+   * this run and not into the module.
+   */
+  const held = new Map(HELD)
+  let minted = 0
   let started = false
   let playing: Promise<void> = Promise.resolve()
   /** Bumped by an interrupt, which is how a script in flight is cut short. */
@@ -71,6 +78,14 @@ export function replayTransport(options: ReplayOptions = {}): ReplayTransport {
   const emit = (name: string, data: string, id: string): void => {
     for (const listener of listeners.get(name) ?? []) listener({ data, lastEventId: id })
   }
+
+  /**
+   * Replay's half of `imageSrc`. A lookup, and an empty string for anything it
+   * is not holding — the same "nothing" the handler answers with, so the
+   * both-cases property holds on this path too and a `../` gets no further here
+   * than there.
+   */
+  const imageSrc = (handle: string): string => held.get(handle) ?? ''
 
   const retain = (frame: Frame): void => {
     log.push(frame)
@@ -124,7 +139,23 @@ export function replayTransport(options: ReplayOptions = {}): ReplayTransport {
       // screen optimistically is settled by a Frame rather than left beside
       // one — the same order the handler produces.
       const text = event.text
-      start([{ frame: { kind: 'prompt', text } }, ...answer(text)])
+      // And what they pasted comes back as Frames, ahead of the words, because
+      // that is what live does: the pictures are pushed to the SDK as content
+      // blocks, the SDK says the user message back, and `classify` reads an
+      // image block out of it. A replay that took the pictures and showed
+      // nothing would be replay disagreeing with live about what a paste is —
+      // which is the one thing this transport exists not to do.
+      //
+      // Minted, never inlined. The Frame carries a handle and the bytes stay
+      // here, exactly as `images.ts` keeps them in the host: a Message that
+      // could name a location is a Message that could fetch from one, and that
+      // rule does not get to be relaxed because there is no host today.
+      const pictures = imagesIn(event.images).map((picture): Frame => {
+        const handle = `img_replay_minted_${(minted += 1)}`
+        held.set(handle, `data:${picture.mediaType};base64,${picture.data}`)
+        return { kind: 'image', mediaType: picture.mediaType, handle }
+      })
+      start([...pictures.map((frame) => ({ frame })), { frame: { kind: 'prompt', text } }, ...answer(text)])
       return { ok: true, status: 202 }
     }
     if (event?.type === 'interrupt') {
@@ -180,16 +211,28 @@ const HELD = new Map<string, string>([
  * not holding — the same "nothing" the handler answers with, so the both-cases
  * property holds on this path too and a `../` gets no further here than there.
  */
-function imageSrc(handle: string): string {
-  return HELD.get(handle) ?? ''
-}
-
-function parse(body: string): { type?: string; text?: unknown } | undefined {
+function parse(body: string): { type?: string; text?: unknown; images?: unknown } | undefined {
   try {
-    return JSON.parse(body) as { type?: string; text?: unknown }
+    return JSON.parse(body) as { type?: string; text?: unknown; images?: unknown }
   } catch {
     return undefined
   }
+}
+
+/**
+ * The pictures out of a prompt Event, and nothing that is not one.
+ *
+ * The handler validates this and refuses the whole Event if it does not hold;
+ * replay is not a guard, so it takes what is shaped right and ignores the rest.
+ */
+function imagesIn(value: unknown): { mediaType: string; data: string }[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    const one = entry as { mediaType?: unknown; data?: unknown }
+    return typeof one?.mediaType === 'string' && typeof one.data === 'string'
+      ? [{ mediaType: one.mediaType, data: one.data }]
+      : []
+  })
 }
 
 function sleep(ms: number): Promise<void> {
