@@ -200,10 +200,16 @@ export function tool(call: {
 }
 
 /**
- * The opening Turn. Scoped to what this ticket covers end to end — prose and
- * tool calls, in all three of a tool's states — because a replay log that
- * showed a surface nothing draws yet would be a demo of an absence. Later
- * tickets add their own case here.
+ * The opening script. Scoped to what is drawn end to end — a replay log that
+ * showed a surface nothing draws yet would be a demo of an absence — and each
+ * ticket adds its own case as it earns one.
+ *
+ * The first Turn is prose and tool calls in all three of a tool's states. What
+ * follows it is the divergences: the points where the Transcript reads exactly
+ * the same before and after while what the agent can actually see has changed.
+ * They are the hardest thing here to believe without seeing, because the
+ * failure they exist to stop looks like nothing at all — so the playground
+ * plays them rather than describing them.
  */
 export const OPENING: Beat[] = [
   { frame: { kind: 'session', sessionId: 'replay-0001' } },
@@ -264,6 +270,67 @@ export const OPENING: Beat[] = [
   ...prose('Pinned, and the suite is green.', { block: 3 }),
   { frame: { kind: 'settled', result: 'Pinned the fixture; the suite is green.', turns: 1 } },
   { frame: { kind: 'cost', usd: 0.0412, turns: 1, durationMs: 8400 } },
+
+  // --- the divergences ---------------------------------------------------------
+
+  { after: 900, frame: { kind: 'prompt', text: 'now do the same across the whole suite' } },
+  {
+    after: 300,
+    frame: {
+      kind: 'recall',
+      mode: 'select',
+      memories: [
+        { path: '/memories/testing.md', scope: 'team', content: 'Pin fixtures; never sleep.' },
+      ],
+    },
+  },
+  // A second recall that surfaced nothing. It draws nothing, and that is the
+  // point of playing it: the silence a viewer sees here is the honest one, and
+  // it is only distinguishable from a missing marker because the recall above
+  // did draw.
+  { frame: { kind: 'recall', mode: 'select', memories: [] } },
+  {
+    after: 240,
+    frame: {
+      kind: 'hook',
+      id: 'hook-guard',
+      name: 'block-secrets',
+      hookEvent: 'PreToolUse',
+      status: 'error',
+      stderr: 'refused: .env is not readable',
+      exitCode: 2,
+    },
+  },
+  ...prose('Blocked on that one. Widening the search instead.', { block: 4 }),
+  {
+    after: 400,
+    frame: {
+      kind: 'compacted',
+      trigger: 'auto',
+      preTokens: 180000,
+      postTokens: 42000,
+      durationMs: 3100,
+    },
+  },
+  ...prose('Working from the summary now.', { block: 5 }),
+  {
+    after: 300,
+    frame: {
+      kind: 'failed',
+      subtype: 'error_max_turns',
+      reason: 'Reached the maximum number of turns',
+      turns: 40,
+      durationMs: 90000,
+      stopReason: 'max_turns',
+      terminalReason: 'max_turns',
+    },
+  },
+  // Memory gone rather than summarised — the harder loss, and the one that
+  // must not read like the compaction two lines above it.
+  { after: 700, frame: { kind: 'reset', transcriptId: 'conv-2' } },
+  { after: 400, frame: { kind: 'prompt', text: 'start again from the failing test' } },
+  ...prose('Fresh context. Reading the failing test.', { block: 6 }),
+  { frame: { kind: 'settled', result: 'Read it.', turns: 1 } },
 ]
 
 /**

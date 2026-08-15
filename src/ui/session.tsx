@@ -3,11 +3,15 @@
 import * as React from 'react'
 
 import type {
+  CompactedMessage,
+  HookMessage,
   Message,
   OutcomeMessage,
+  RecallMessage,
   ToolCallMessage,
   TurnOutcome,
 } from '../core/transcript.ts'
+import type { RecalledMemory } from '../core/frame.ts'
 import type { AgentSession } from '../react/session.ts'
 import { ClaudeMessage } from './claude-message.tsx'
 import { ClaudePrompt } from './claude-prompt.tsx'
@@ -113,12 +117,19 @@ export function ClaudeSession({
  *
  * The `switch` is exhaustive and the fallback is visible on purpose: a Message
  * kind this container has no chrome for yet is still an entry a viewer can
- * see, so a Transcript never silently drops something the agent said. The
- * remaining kinds get their real surfaces in the tickets named below; this is
- * what stands in until then, not what they should look like.
+ * see, so a Transcript never silently drops something the agent said. `image`
+ * gets its real surface in #12; that is what `Undrawn` stands in for, not what
+ * it should look like.
  */
 function Entry({ message }: { message: Message }) {
-  return <Attributed message={message}>{draw(message)}</Attributed>
+  const drawn = draw(message)
+  // A Message that draws nothing takes no room — an empty row is still the
+  // screen holding space for something it will not explain. `draw` is what
+  // decides that, and it does so in exactly one place: a recall that surfaced
+  // nothing. Every other kind draws something, which is what keeps the golden
+  // log's "nothing silently dropped" check honest.
+  if (drawn === null) return null
+  return <Attributed message={message}>{drawn}</Attributed>
 }
 
 function draw(message: Message): React.ReactNode {
@@ -139,11 +150,29 @@ function draw(message: Message): React.ReactNode {
       return <ToolCall message={message} />
     case 'outcome':
       return <Outcome message={message} />
+    case 'compacted':
+      return <Compacted message={message} />
+    case 'reset':
+      return (
+        <Marker
+          kind="reset"
+          glyph="⦸"
+          // Not "compacted", and not softened. A reset is the harder thing:
+          // nothing was kept, so a viewer reading "condensed" would be reading
+          // a smaller loss than the one they had.
+          label="Context reset — memory cleared, not summarised"
+          details={[`new transcript ${message.transcriptId}`]}
+          tone="var(--cc-pending)"
+        />
+      )
+    case 'recall':
+      // Decided here rather than inside `Recall`, because a component that
+      // returns null still leaves behind the row it was drawn into — which is
+      // a blank entry, not silence.
+      return message.memories.length === 0 ? null : <Recall message={message} />
+    case 'hook':
+      return <Hook message={message} />
     case 'image': // #12
-    case 'compacted': // #10
-    case 'reset': // #10
-    case 'recall': // #10
-    case 'hook': // #10
       return <Undrawn kind={message.kind} />
     default: {
       // Exhaustive at compile time — a kind added to the vocabulary has to be
@@ -210,6 +239,176 @@ function Outcome({ message }: { message: OutcomeMessage }) {
       {ENDED[message.outcome]}
       {why === '' ? null : ` — ${why}`}
     </div>
+  )
+}
+
+/**
+ * A divergence marker: the line drawn where what the agent can see stopped
+ * matching what the Transcript shows.
+ *
+ * These exist because silence is the bug. Nothing above this point looks any
+ * different after a compaction, a reset or a recall — the Messages are all
+ * still there — while the conversation the agent is actually holding has been
+ * summarised, thrown away, or joined by something nobody in this Session said.
+ * A marker is the only place a viewer can learn that.
+ *
+ * `data-divergence` is the machine-readable half, so a marker can be found and
+ * told apart without reading prose — the same contract `data-outcome` carries
+ * for how a Turn ended. Being what everything downstream keys off, it is typed
+ * rather than left open: a mistyped kind is a compile error here, not a
+ * selector that silently matches nothing wherever someone later looks for it.
+ */
+type Divergence = Extract<Message['kind'], 'compacted' | 'reset' | 'recall' | 'hook'>
+
+function Marker({
+  kind,
+  glyph,
+  label,
+  details = [],
+  tone = 'var(--cc-fg-muted)',
+  status,
+}: {
+  /**
+   * Drawn from the Message vocabulary through `Extract`, so a kind renamed
+   * there stops compiling here rather than quietly becoming an attribute
+   * nothing matches.
+   */
+  kind: Divergence
+  glyph: string
+  label: string
+  /** Whatever the runtime actually gave. Anything missing is simply absent. */
+  details?: (string | undefined)[]
+  tone?: string
+  /** Where a marker has states of its own, as a hook does. */
+  status?: string
+}) {
+  const said = details.filter((part): part is string => part !== undefined && part !== '')
+  return (
+    <div
+      data-divergence={kind}
+      {...(status !== undefined ? { 'data-status': status } : {})}
+      className="cc:flex cc:min-w-0 cc:flex-wrap cc:items-baseline cc:gap-2"
+      style={{ color: tone }}
+    >
+      <span aria-hidden>{glyph}</span>
+      <span className="cc:min-w-0">
+        {label}
+        {said.length === 0 ? null : ` — ${said.join(' · ')}`}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Where memory was replaced by a summary.
+ *
+ * The counts are the point: "compacted" alone says an event happened, while
+ * `180,000 → 42,000` says how much of the conversation the agent no longer
+ * has. They are optional on the wire, so each is drawn only where the SDK gave
+ * it — a zero standing in for a number nobody sent would be the screen
+ * inventing the very fact it exists to report.
+ */
+function Compacted({ message }: { message: CompactedMessage }) {
+  return (
+    <Marker
+      kind="compacted"
+      glyph="⇲"
+      label="Context compacted — the agent is working from a summary"
+      details={[message.trigger, counts(message), took(message.durationMs)]}
+    />
+  )
+}
+
+function counts(message: CompactedMessage): string | undefined {
+  const before = message.preTokens
+  const after = message.postTokens
+  if (before !== undefined && after !== undefined) {
+    return `${tokens(before)} → ${tokens(after)} tokens`
+  }
+  if (before !== undefined) return `${tokens(before)} tokens before`
+  if (after !== undefined) return `${tokens(after)} tokens after`
+  return undefined
+}
+
+/** Grouped by hand rather than by locale, so the same log reads the same anywhere. */
+function tokens(count: number): string {
+  return String(Math.round(count)).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
+function took(durationMs: number | undefined): string | undefined {
+  return durationMs === undefined ? undefined : `took ${(durationMs / 1000).toFixed(1)}s`
+}
+
+/**
+ * Where context arrived that nobody in this conversation said.
+ *
+ * A recall that surfaced nothing draws nothing — see `draw`, which is where
+ * that is decided. It is the one silence here which is honest: no memory
+ * entered the agent's context, so there is no divergence between what the
+ * screen shows and what the agent can see, and a marker would be the screen
+ * reporting an arrival that did not happen.
+ */
+function Recall({ message }: { message: RecallMessage }) {
+  const found = message.memories
+  return (
+    <Marker
+      kind="recall"
+      glyph="⊕"
+      label={
+        found.length === 1
+          ? 'Memory recalled — context from outside this conversation'
+          : `${found.length} memories recalled — context from outside this conversation`
+      }
+      // Where each came from, because provenance is the whole claim: this text
+      // is in the agent's context and no one here put it there.
+      details={[message.mode, ...found.map(from)]}
+      tone="var(--cc-info)"
+    />
+  )
+}
+
+/**
+ * Where a memory came from and what it says. The path alone would report only
+ * that something arrived; the content is the thing the agent is now acting on,
+ * and it is carried, so dropping it would leave a viewer told that context
+ * appeared and not told what it was.
+ */
+function from(memory: RecalledMemory): string {
+  const where = memory.scope === undefined ? memory.path : `${memory.path} (${memory.scope})`
+  return memory.content === undefined ? where : `${where}: ${memory.content}`
+}
+
+/**
+ * A hook firing, and what it said.
+ *
+ * A hook is the other party in the conversation: it runs on the agent's
+ * behalf, and one that refuses rewrites what the agent was allowed to do. Left
+ * silent, the Transcript shows a tool call that simply never happened and
+ * never says who stopped it — so a hook that errored is drawn as an error and
+ * keeps its own words, which are the only account of why.
+ *
+ * All three output channels are passed through rather than one being chosen:
+ * which of them a hook wrote to is the hook's business, and picking for it is
+ * how a refusal's reason goes missing.
+ */
+function Hook({ message }: { message: HookMessage }) {
+  const failed = message.status === 'error'
+  return (
+    <Marker
+      kind="hook"
+      glyph="⚑"
+      label={`Hook ${message.name}`}
+      status={message.status}
+      details={[
+        message.status,
+        message.hookEvent,
+        message.output,
+        message.stderr,
+        message.stdout,
+        message.exitCode === undefined ? undefined : `exit ${message.exitCode}`,
+      ]}
+      tone={failed ? 'var(--cc-error)' : 'var(--cc-fg-muted)'}
+    />
   )
 }
 
