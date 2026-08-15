@@ -293,6 +293,74 @@ test('with a Thread’s prose forwarded, the main agent’s words stay the main 
   // blanket attribution would sweep those up and still pass the two
   // assertions above.
   expect(document.querySelectorAll('[data-thread]')).toHaveLength(1)
+  view.unmount()
+})
+
+/**
+ * Images through the whole stack, which is the only place the handle rule can
+ * be shown to hold.
+ *
+ * Every claim it makes spans two layers. "A Message carries a handle and never
+ * a payload" is the handler substituting and the browser drawing; "an unminted
+ * handle resolves to nothing" is a URL the screen composed and a lookup the
+ * host performs. Tested apart, each half can pass against a shape the other
+ * never produces — which is exactly how the interrupt hid for three tickets.
+ *
+ * So nothing here names a Frame. What goes in is a paste and an SDK echo; what
+ * comes out is read off the screen, and the picture is fetched back through the
+ * real handler using the very `src` the real container rendered.
+ */
+test('a pasted screenshot reaches the model, and comes back as a handle rather than as bytes', async () => {
+  const sdk = fakeQuery()
+  const handler = createAgentHandler({ createQuery: sdk.createQuery })
+  const view = await mount(handler)
+
+  await paste(shot())
+  await type('why is this button clipped')
+  await enter()
+
+  // What the model was actually handed: the picture ahead of the words, which
+  // is the half no assertion about the screen could ever see.
+  expect(sdk.prompts[0]?.message.content).toEqual([
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PIXEL } },
+    { type: 'text', text: 'why is this button clipped' },
+  ])
+
+  // The runtime echoes the Turn back — image block first, as it was sent.
+  await said(sdk, init('sess-image'), askedWith(PIXEL, 'why is this button clipped'))
+
+  const picture = screen.getByRole('img') as HTMLImageElement
+  expect(picture.alt).not.toBe('')
+
+  // Nothing in the browser holds the payload. Asserted on the whole document
+  // after a real round trip, rather than on the fields someone thought to
+  // strip: the composer let go of the paste when it sent it, and what came
+  // back names a handle.
+  expect(document.body.innerHTML).not.toContain(PIXEL)
+  expect(picture.src).not.toContain('data:')
+
+  // And the handle resolves — through the same handler, at the URL the screen
+  // composed. This is the case that stops "resolves to nothing" being
+  // satisfied by the whole feature being absent.
+  const held = await handler(new Request(picture.src))
+  expect(held.status).toBe(200)
+  expect(held.headers.get('content-type')).toBe('image/png')
+  expect([...new Uint8Array(await held.arrayBuffer())]).toEqual(
+    [...atob(PIXEL)].map((character) => character.charCodeAt(0)),
+  )
+
+  // The same URL with the handle swapped for something that wants to be a
+  // path. It is a query parameter meeting a map lookup, so there is nothing to
+  // traverse — and the answer is the same nothing every unminted handle gets.
+  //
+  // Breakage this fails on: a resolution that joins the handle onto a
+  // directory, or that answers differently for "no such key" than for "not
+  // yours" — either of which turns a handle into a way to ask about the disk.
+  for (const wrong of ['../../etc/passwd', '..%2F..%2Fetc%2Fpasswd', '/etc/passwd', 'img_0000']) {
+    const refused = await handler(new Request(picture.src.replace(/image=.*$/, `image=${wrong}`)))
+    expect(refused.status).toBe(404)
+    expect(await refused.text()).toBe('')
+  }
 
   view.unmount()
 })
@@ -324,11 +392,55 @@ test('a Thread reports its own progress, and the meter prefers the runtime’s c
   // the runtime's number would report a Thread a minute and a half in as one
   // that had only just started.
   expect(meter('toolu_task_core')).not.toContain('0s')
+  view.unmount()
+})
+
+test('a screenshot the agent captured is shown rather than described', async () => {
+  const sdk = fakeQuery()
+  const handler = createAgentHandler({ createQuery: sdk.createQuery })
+  const view = await mount(handler)
+
+  await type('show me the page')
+  await enter()
+  await said(
+    sdk,
+    init('sess-shown'),
+    asked('show me the page'),
+    calls('toolu_shot', 'Screenshot'),
+    captured('toolu_shot', PIXEL),
+  )
+
+  // The agent put a picture in the Transcript, and it is a picture — not a
+  // sentence about one, and not a tool result that mentions an image.
+  const picture = screen.getByRole('img') as HTMLImageElement
+  expect(picture.alt).toContain('toolu_shot')
+  expect((await handler(new Request(picture.src))).status).toBe(200)
+  expect(document.body.innerHTML).not.toContain(PIXEL)
 
   view.unmount()
 })
 
 // --- driving the seam ---------------------------------------------------------
+
+/** A one-pixel PNG, small enough to read and real enough to decode. */
+const PIXEL =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+function shot(): File {
+  return new File([Uint8Array.from(atob(PIXEL), (c) => c.charCodeAt(0))], 'shot.png', {
+    type: 'image/png',
+  })
+}
+
+/** A screenshot arriving on the clipboard, as one does after a capture. */
+function paste(file: File): Promise<void> {
+  return act(async () => {
+    fireEvent.paste(screen.getByLabelText('Prompt'), {
+      clipboardData: { files: [file], items: [] },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+}
 
 /** The command names the menu is offering, in the order it offers them. */
 function offered(): string[] {
@@ -645,6 +757,51 @@ function commandsChanged(): ClassifyInput {
     type: 'system',
     subtype: 'commands_changed',
     commands: [{ name: 'deploy', description: 'Ship it', argumentHint: '<env>' }],
+  }
+}
+
+/** The runtime echoing back a Turn that had a picture in front of the words. */
+function askedWith(data: string, text: string): ClassifyInput {
+  return {
+    type: 'user',
+    parent_tool_use_id: null,
+    message: {
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data } },
+        { type: 'text', text },
+      ],
+    },
+  }
+}
+
+/** A tool call, so the screenshot below has a call to be attributed to. */
+function calls(id: string, name: string): ClassifyInput {
+  return {
+    type: 'assistant',
+    parent_tool_use_id: null,
+    message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input: {} }] },
+  }
+}
+
+/** A tool handing back a screenshot for the Transcript to show. */
+function captured(id: string, data: string): ClassifyInput {
+  return {
+    type: 'user',
+    parent_tool_use_id: null,
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: id,
+          content: [
+            { type: 'text', text: 'Captured.' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data } },
+          ],
+        },
+      ],
+    },
   }
 }
 
