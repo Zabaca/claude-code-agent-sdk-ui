@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { readdir } from 'node:fs/promises'
 import { relative } from 'node:path'
 
 import { bareSpecifiersIn, reachableFrom } from '../../test/imports.ts'
@@ -55,25 +56,35 @@ test('core reaches nothing outside core', async () => {
     .sort()
 
   expect(outside).toEqual([])
-  // Every module in `core` bar the fixtures, so this is the whole surface and
-  // not the first file that happened to import nothing.
+  // Not the first file that happened to import nothing.
   expect(reached.size).toBe(9)
+  // And what the entry point deliberately does not advertise. These are read by
+  // the handler, the hook and the fakes directly; naming them here is what
+  // makes "not on the public surface" a decision rather than an oversight.
+  expect(await unreachedModules()).toEqual(['image.ts', 'wire.ts'])
 })
 
 test('core imports no runtime at all — no react, no bun, no node', async () => {
   // The other half of "no clock and no socket": `core` is meant to run in a
   // browser, in a test, and in a server process alike, so anything it reaches
   // for beyond the language is a dependency a consumer did not ask for.
-  const reached = await reachableFrom(`${dir}/index.ts`)
-
+  //
+  // Walked over every module in the directory rather than out from `index.ts`,
+  // because purity is a property of the code and not of what the entry point
+  // happens to advertise. A module the handler imports directly runs in the
+  // same browser bundle as one `reduce` reaches, and a clock in it is the same
+  // clock — but it would sit outside a walk that starts at the entry point,
+  // which is where two of them sit today.
   const imported: string[] = []
-  for (const path of reached) {
-    const source = await Bun.file(path).text()
+  for (const name of await modules()) {
+    const source = await Bun.file(`${dir}/${name}`).text()
     for (const specifier of bareSpecifiersIn(source)) {
-      imported.push(`${relative(dir, path)} → ${specifier}`)
+      imported.push(`${name} → ${specifier}`)
     }
-    expect(source).not.toContain('Bun.')
-    expect(source).not.toContain('Date.now()')
+    expect(`${name} says Bun.: ${source.includes('Bun.')}`).toBe(`${name} says Bun.: false`)
+    expect(`${name} reads the clock: ${source.includes('Date.now()')}`).toBe(
+      `${name} reads the clock: false`,
+    )
   }
 
   // The SDK is the one name `core` may say, and only `classify` may say it:
@@ -81,3 +92,15 @@ test('core imports no runtime at all — no react, no bun, no node', async () =>
   // what holds it to types.
   expect(imported).toEqual(['classify.ts → @anthropic-ai/claude-agent-sdk'])
 })
+
+/** Every module in `core`, whether or not the entry point reaches it. */
+async function modules(): Promise<string[]> {
+  const names = await readdir(dir)
+  return names.filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts')).sort()
+}
+
+/** The ones the entry point does not reach — named so the set cannot drift. */
+async function unreachedModules(): Promise<string[]> {
+  const reached = new Set([...(await reachableFrom(`${dir}/index.ts`))].map((path) => relative(dir, path)))
+  return (await modules()).filter((name) => name !== 'index.ts' && !reached.has(name))
+}
