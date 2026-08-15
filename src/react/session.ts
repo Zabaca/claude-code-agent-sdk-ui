@@ -7,7 +7,7 @@ import type { AgentEvent, PromptEvent, PromptImage } from '../core/event.ts'
 import type { Frame } from '../core/frame.ts'
 import { blockAt, isPartialKind, type PartialKind, type PartialText } from '../core/partial.ts'
 import { reduce } from '../core/reduce.ts'
-import type { Message, ReasoningMessage, TextMessage, Transcript } from '../core/transcript.ts'
+import type { Transcript } from '../core/transcript.ts'
 
 /**
  * The browser half. Opens the SSE stream the handler serves, runs `reduce` over
@@ -107,37 +107,21 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     })
   }, [will])
 
-  const reduced = useMemo(
-    () => reduce(present(state.frames), { reasoning }),
-    [state.frames, reasoning],
+  // One producer. Everything on screen — retained, still being written, or not
+  // yet acknowledged — is placed by the module whose job placing is, so the
+  // Transcript the hook hands out has the same index-stability the golden test
+  // holds `reduce` to. Assembling the tail here instead is what used to move
+  // the agent's words out from under their own React key whenever a Thread
+  // streamed beside them.
+  const transcript = useMemo(
+    (): Transcript =>
+      reduce(present(state.frames), { reasoning, live: state.live, sent: state.sent }),
+    [state.frames, state.live, state.sent, reasoning],
   )
 
-  const transcript = useMemo((): Transcript => {
-    if (state.live.length === 0 && state.sent.length === 0) return reduced
-    const messages: Message[] = [...reduced.messages]
-    // Blocks still on the wire, in the order they were started. They sit after
-    // everything the log retained, because that is where they are being
-    // written.
-    for (const block of state.live) {
-      if (block.kind === 'reasoning' && !reasoning) continue
-      messages.push(
-        compact<TextMessage | ReasoningMessage>({
-          kind: block.kind,
-          text: block.text,
-          thread: block.thread,
-        }),
-      )
-    }
-    for (const sent of state.sent) messages.push({ kind: 'prompt', text: sent.text })
-    if (state.sent.length === 0) return { ...reduced, messages }
-    // Words on their way to the handler are a Turn about to start; showing them
-    // beside an idle Turn would say the agent had already finished with them.
-    return { ...reduced, messages, turn: { status: 'working' } }
-  }, [reduced, state.live, state.sent, reasoning])
-
   const mode = useMemo(
-    () => modeOf(reduced.harness?.permissionMode) ?? options.mode ?? 'auto',
-    [reduced.harness?.permissionMode, options.mode],
+    () => modeOf(transcript.harness?.permissionMode) ?? options.mode ?? 'auto',
+    [transcript.harness?.permissionMode, options.mode],
   )
 
   return compact<AgentSession>({
@@ -290,6 +274,12 @@ type Live = {
   kind: PartialKind
   text: string
   thread?: string
+  /**
+   * How many Messages stood ahead of the block when it opened — where it
+   * belongs in the order. Stamped once, when the block is first seen, so a
+   * block keeps the place it started at however much arrives around it.
+   */
+  after: number
 }
 
 /** A person's words, shown before the handler has retained them. */
@@ -328,6 +318,7 @@ function step(state: SessionState, arrival: Arrival): SessionState {
       const partial = parse<PartialText>(arrival.body)
       if (!partial || !isPartialKind(partial.kind)) return state
       const at = blockAt(partial)
+      const held = state.live.findIndex((one) => one.at === at)
       const block = compact<Live>({
         at,
         kind: partial.kind,
@@ -335,8 +326,18 @@ function step(state: SessionState, arrival: Arrival): SessionState {
         // the deltas and sends what the block holds.
         text: partial.text,
         thread: partial.thread,
+        // Kept from when the block opened, never restamped: a delta arriving
+        // after a Thread's Frame landed must not move the block it grows.
+        //
+        // Blocks already open count as well as Frames already retained. A
+        // block that opened second is behind the first block's eventual Frame,
+        // not ahead of it — counting only the log would put the two in the
+        // order they *finished*, which is the thing being fixed. Counted over
+        // what is present rather than over the array's length, because a Frame
+        // arriving out of order leaves a hole and `reduce` walks the log
+        // without one.
+        after: state.live[held]?.after ?? present(state.frames).length + state.live.length,
       })
-      const held = state.live.findIndex((one) => one.at === at)
       if (held === -1) return { ...state, live: [...state.live, block] }
       const live = state.live.slice()
       live[held] = block

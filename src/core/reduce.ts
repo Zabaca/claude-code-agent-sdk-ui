@@ -1,4 +1,5 @@
 import type { Frame } from './frame.ts'
+import type { PartialKind } from './partial.ts'
 import type {
   CompactedMessage,
   ContextUsage,
@@ -42,10 +43,51 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
   const threadContext: Record<string, ContextUsage> = {}
   let turn: Turn = { status: 'idle' }
 
-  for (const frame of frames) {
+  const live = options.live ?? []
+  const sent = options.sent ?? []
+  /** How many live blocks have taken their place. They are given in start order. */
+  let opened = 0
+  /**
+   * Where the live blocks sit. Prose coalesces into the Message before it, and
+   * a block still being written is not one a Frame may grow: the Frame is the
+   * whole of its own block and the live copy is about to be dropped, so letting
+   * the two merge puts one block's words on the front of another's.
+   */
+  const streaming = new Set<number>()
+
+  /**
+   * Live blocks that opened before the Frame about to be read.
+   *
+   * Appended at the point in the walk where they were started, never spliced in
+   * afterwards — which is both what keeps a Message's index stable and what
+   * keeps the `calls` and `hooks` indices above pointing at what they recorded.
+   * A block appended after everything retained instead would move the moment a
+   * Thread's Frame landed beside it.
+   */
+  const place = (upTo: number): void => {
+    while (opened < live.length) {
+      const block = live[opened]
+      if (!block || block.after > upTo) break
+      opened += 1
+      // The same rule the retained deliberation is held to, applied to the
+      // block still being written: thinking is not an answer either way.
+      if (block.kind === 'reasoning' && options.reasoning !== true) continue
+      streaming.add(messages.length)
+      messages.push(
+        compact<TextMessage | ReasoningMessage>({
+          kind: block.kind,
+          text: block.text,
+          thread: block.thread,
+        }),
+      )
+    }
+  }
+
+  for (const [at, frame] of frames.entries()) {
+    place(at)
     switch (frame.kind) {
       case 'text': {
-        const tail = messages.at(-1)
+        const tail = streaming.has(messages.length - 1) ? undefined : messages.at(-1)
         if (tail?.kind === 'text' && tail.thread === frame.thread) {
           messages[messages.length - 1] = { ...tail, text: tail.text + frame.text }
           break
@@ -113,7 +155,7 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
         // Kept out of the Transcript unless asked for: thinking is not an
         // answer. Nothing else in the Frame vocabulary is withheld.
         if (options.reasoning !== true) break
-        const tail = messages.at(-1)
+        const tail = streaming.has(messages.length - 1) ? undefined : messages.at(-1)
         if (tail?.kind === 'reasoning' && tail.thread === frame.thread) {
           messages[messages.length - 1] = { ...tail, text: tail.text + frame.text }
           break
@@ -267,8 +309,35 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
     }
   }
 
+  // Blocks opened after the last retained Frame, and then the words on their
+  // way to the handler — which are the newest thing there is, so they go last.
+  place(Number.POSITIVE_INFINITY)
+  for (const one of sent) messages.push({ kind: 'prompt', text: one.text })
+  // Words in flight are a Turn about to start. Showing them beside an idle Turn
+  // would say the agent had already finished with them.
+  if (sent.length > 0) turn = { status: 'working' }
+
   return { ...compact<SessionState>(state), messages, turn, threadContext }
 }
+
+/**
+ * A block of prose still being written. Not retained — the log holds whole
+ * Messages — so it is not a Frame, and it is gone the moment its Frame lands.
+ */
+export type LiveText = {
+  kind: PartialKind
+  text: string
+  thread?: string
+  /**
+   * How many Frames had been retained when the block opened, which is where it
+   * belongs in the order. Without it a block written while a Thread is also
+   * streaming loses its place to the Thread's Frame.
+   */
+  after: number
+}
+
+/** A person's words, on screen before the handler has retained them. */
+export type SentPrompt = { text: string }
 
 /** What `reduce` reads besides the Frames. */
 export type ReduceOptions = {
@@ -277,6 +346,16 @@ export type ReduceOptions = {
    * "thinking is not an answer" — turn it on to watch a prompt being debugged.
    */
   reasoning?: boolean
+  /**
+   * Blocks still being written, in the order they were started. Given here
+   * rather than stitched on afterwards because placing a Message is this
+   * module's job: a caller that appends its own loses the one property the
+   * Transcript has to have — that an index means the same Message for as long
+   * as it is on screen.
+   */
+  live?: readonly LiveText[]
+  /** Words sent but not yet retained. */
+  sent?: readonly SentPrompt[]
 }
 
 /**

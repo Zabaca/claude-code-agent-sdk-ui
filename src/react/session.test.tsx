@@ -441,10 +441,65 @@ test("a Thread's live text is its own, not the agent's", async () => {
 
   await act(async () => fake.frame({ kind: 'text', text: 'Sub says.', thread: 'call-1' }))
 
+  // The Thread's block became a Frame; the agent's is still being written. What
+  // must not happen is the two swapping places — a Message keeps its index for
+  // as long as it is on screen, and the index is what `ClaudeSession` keys an
+  // `Entry` on. Before this held, a Thread streaming beside the agent moved the
+  // agent's words out from under their own React key.
   expect(session.current.transcript.messages).toEqual([
-    { kind: 'text', text: 'Sub says.', thread: 'call-1' },
     { kind: 'text', text: 'Main says' },
+    { kind: 'text', text: 'Sub says.', thread: 'call-1' },
   ])
+})
+
+test('a live block keeps its place while the log grows around it', async () => {
+  // `golden.test.ts`'s "never moves a Message it has already placed", held
+  // against the Transcript the hook hands out rather than the one `reduce`
+  // builds from retained Frames alone. They are the same type and a viewer
+  // cannot tell them apart, so one of them quietly not having the property is
+  // the whole defect.
+  //
+  // Scoped to a block's life as a live block, which is as far as the property
+  // can reach. A block's own Frame is retained wherever the handler retains it
+  // — blocks close in the order they finish, not the order they opened — so a
+  // Thread that finishes first is ahead of the agent in the log, and it is the
+  // log that is authoritative. What must not happen, and used to, is a block
+  // being shoved along by Frames that are nothing to do with it.
+  const fake = fakeSse()
+  const session = await mount(fake)
+  const placements: string[][] = []
+  const note = (): void => {
+    placements.push(
+      session.current.transcript.messages.map(
+        (message) => `${message.kind}:${'thread' in message ? (message.thread ?? '-') : '-'}`,
+      ),
+    )
+  }
+
+  await act(async () => fake.frame({ kind: 'prompt', text: 'audit both' }))
+  note()
+  await act(async () => fake.partial({ block: 0, kind: 'text', text: 'Opening two' }))
+  note()
+  await act(async () => fake.partial({ block: 0, kind: 'text', text: 'Reading', thread: 'call-1' }))
+  note()
+  // The Thread finishes first, so its Frame is retained while the agent's block
+  // is still open — the arrival that used to reshuffle the two.
+  await act(async () => fake.frame({ kind: 'text', text: 'Reading.', thread: 'call-1' }))
+  note()
+
+  const moved = placements.filter((later, at) =>
+    (placements[at - 1] ?? []).some((placement, index) => later[index] !== placement),
+  )
+
+  expect(moved).toEqual([])
+  // Non-vacuity: the agent's still-open block really is on screen throughout,
+  // really is ahead of the Thread's, and the Thread's Frame really did land.
+  expect(placements.at(-1)).toEqual(['prompt:-', 'text:-', 'text:call-1'])
+  expect(session.current.transcript.messages[2]).toEqual({
+    kind: 'text',
+    text: 'Reading.',
+    thread: 'call-1',
+  })
 })
 
 test('live text does not outlive the Turn that was writing it', async () => {
@@ -485,9 +540,13 @@ test('a Frame settles the block it is the whole of, not one of another kind', as
 
   await act(async () => fake.frame({ kind: 'text', text: 'Yes.' }))
 
+  // The Frame settles the prose, not the deliberation — and the deliberation
+  // keeps the place it opened in rather than being shunted behind whatever was
+  // retained first. It opened first, as the comment above says and as this
+  // assertion used to contradict.
   expect(session.current.transcript.messages).toEqual([
-    { kind: 'text', text: 'Yes.' },
     { kind: 'reasoning', text: 'Hmm, maybe' },
+    { kind: 'text', text: 'Yes.' },
   ])
 })
 
