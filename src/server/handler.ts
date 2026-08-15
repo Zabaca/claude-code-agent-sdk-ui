@@ -4,6 +4,7 @@ import { classify, type ClassifyInput } from '../core/classify.ts'
 import type { PromptImage } from '../core/event.ts'
 import type { FailedFrame, Frame, ImageFrame, SettledFrame, SlashCommandInfo } from '../core/frame.ts'
 import { blockAt, type PartialKind, type PartialText } from '../core/partial.ts'
+import { frameEvent, partialEvent, resumeFrom } from '../core/wire.ts'
 import { imageStore, SERVABLE, type ImageStore } from './images.ts'
 import { pushable, type Pushable } from './pushable.ts'
 
@@ -584,24 +585,6 @@ class AgentSession {
       query.close?.()
     }
   }
-}
-
-// --- SSE framing ---------------------------------------------------------------
-
-function frameEvent(frame: Frame, index: number): string {
-  return `id: ${index}\nevent: frame\ndata: ${JSON.stringify(frame)}\n\n`
-}
-
-/** No `id:`, so a partial never moves the browser's resume cursor. */
-function partialEvent(partial: PartialText): string {
-  return `event: partial\ndata: ${JSON.stringify(partial)}\n\n`
-}
-
-/** `Last-Event-ID` names the last Frame that landed; resume with the next one. */
-function resumeFrom(lastEventId: string | null): number {
-  if (lastEventId === null) return 0
-  const last = Number.parseInt(lastEventId, 10)
-  return Number.isInteger(last) && last >= 0 ? last + 1 : 0
 }
 
 // --- reading a shape we do not control ------------------------------------------
