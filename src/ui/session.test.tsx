@@ -631,6 +631,39 @@ test('the working line shows how full the context is, while the Turn is still ru
   view.unmount()
 })
 
+test('deliberation is off the screen by default, and on it only when asked for', async () => {
+  const fake = fakeSse()
+  const quiet = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'is this safe?' })
+    // Live and retained alike. Streaming deliberation into the Transcript would
+    // put the model's reasoning on screen as though it were an answer, which is
+    // a product decision nobody made.
+    fake.partial({ block: 0, kind: 'reasoning', text: 'Maybe not, let me check' })
+    fake.frame({ kind: 'reasoning', text: 'Maybe not, let me check the caller' })
+    fake.frame({ kind: 'text', text: 'It is safe.' })
+  })
+
+  expect(screen.getByText('It is safe.')).toBeDefined()
+  expect(there(screen.queryByText(/Maybe not/))).toBe(false)
+
+  quiet.unmount()
+
+  // The same log, with the flag on. Nothing about the wire changed — the
+  // Frames were always there — so this is a viewing decision, not a capture
+  // one, and the escape hatch exists for the person debugging a prompt.
+  const asked = await mount(fake, { reasoning: true })
+
+  const deliberation = screen.getByText('Maybe not, let me check the caller')
+  expect(deliberation).toBeDefined()
+  // And told apart from the answer. Drawn identically, thinking on screen
+  // *is* an answer to anyone reading it.
+  expect(deliberation.className).not.toBe(screen.getByText('It is safe.').className)
+
+  asked.unmount()
+})
+
 test('a rate limit is never read as a context reading', async () => {
   const fake = fakeSse()
   const view = await mount(fake)

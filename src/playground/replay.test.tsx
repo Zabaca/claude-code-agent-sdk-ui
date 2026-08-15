@@ -62,8 +62,10 @@ test('prose arrives word by word, before the block becomes a Frame', async () =>
   const replay = replayTransport({ wait: clock.wait })
   const view = await mount(replay)
 
-  // session, harness, commands, the prompt, then the block opening.
-  await clock.beat(6)
+  // session, harness, commands, the prompt, the deliberation, then the block
+  // opening. The deliberation is a Frame like any other on the wire — it is
+  // only the Transcript it is kept out of — so it takes a beat here.
+  await clock.beat(7)
 
   // Half a sentence is on screen and the log does not hold it yet: what is
   // there is live text, which is the thing that makes the interface feel
@@ -230,6 +232,63 @@ test('the opening log advertises commands, and changes them while it runs', asyn
   expect(last.map((command) => command.name)).not.toEqual(
     advertised[0]?.kind === 'commands' ? advertised[0].commands.map((one) => one.name) : [],
   )
+})
+
+test('the opening log meters the context as it fills, and the week separately', async () => {
+  // The same guard, for this ticket's case. The working line's count is the one
+  // number on screen that moves on its own, so a script that never metered the
+  // context would leave it permanently blank and the demo would look correct.
+  const frames = OPENING.flatMap((beat) => (beat.frame ? [beat.frame] : []))
+  const readings = frames.flatMap((frame) => (frame.kind === 'context' ? [frame.totalTokens] : []))
+
+  expect(readings.length).toBeGreaterThan(1)
+  // Readings that never differ are a meter nobody can tell from a frozen one.
+  expect(new Set(readings).size).toBeGreaterThan(1)
+
+  // At least one lands before the Turn it belongs to has ended. A count that
+  // only arrived with the result would sit blank for the whole of the one
+  // stretch of time the working line is on screen.
+  const ended = frames.findIndex((frame) => frame.kind === 'settled' || frame.kind === 'failed')
+  const first = frames.findIndex((frame) => frame.kind === 'context')
+  expect(first).toBeGreaterThan(-1)
+  expect(first).toBeLessThan(ended)
+
+  // The count falls across the compaction, which is the fact the meter exists
+  // to show: the Transcript above the marker is unchanged while the window the
+  // agent is working from has just been emptied.
+  const at = frames.findIndex((frame) => frame.kind === 'compacted')
+  const before = frames.slice(0, at).flatMap((f) => (f.kind === 'context' ? [f.totalTokens] : []))
+  const after = frames.slice(at).flatMap((f) => (f.kind === 'context' ? [f.totalTokens] : []))
+  expect(after[0]).toBeLessThan(before.at(-1) ?? 0)
+
+  // The other meter, played and kept apart. Different clocks, different
+  // questions — and no chrome for either in v0.1, so `reduce` is where a
+  // reviewer can see they did not blend.
+  const transcript = reduce(frames)
+  expect(transcript.rateLimit?.utilization).toBeDefined()
+  expect(transcript.context?.totalTokens).toBe(readings.at(-1))
+  expect(transcript.context?.totalTokens).not.toBe(transcript.rateLimit?.utilization)
+})
+
+test('the opening log deliberates, and the playground does not show it', async () => {
+  const frames = OPENING.flatMap((beat) => (beat.frame ? [beat.frame] : []))
+  const thought = frames.flatMap((frame) => (frame.kind === 'reasoning' ? [frame.text] : []))
+
+  // Played, so the default is demonstrated against something rather than
+  // asserted about an empty log.
+  expect(thought.length).toBeGreaterThan(0)
+
+  const replay = replayTransport({ wait: immediately })
+  const view = await mount(replay)
+  await drain(replay)
+
+  const said = screen.getByRole('log').textContent ?? ''
+  for (const line of thought) expect(said).not.toContain(line)
+  // And the Turn it was thinking during did reach the screen, so the silence
+  // above is deliberation being withheld rather than the script not running.
+  expect(said).toContain('Pinned, and the suite is green.')
+
+  view.unmount()
 })
 
 // --- driving the seam ---------------------------------------------------------
