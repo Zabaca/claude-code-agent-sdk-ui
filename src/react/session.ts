@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 
 import type { ClaudeEffort, ClaudeMode } from '../core/composer.ts'
-import type { AgentEvent } from '../core/event.ts'
+import type { AgentEvent, PromptEvent, PromptImage } from '../core/event.ts'
 import type { Frame } from '../core/frame.ts'
 import type { PartialText } from '../core/partial.ts'
 import { reduce } from '../core/reduce.ts'
@@ -62,18 +62,34 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   )
 
   const send = useCallback(
-    (text: string): void => {
+    (text: string, images: PromptImage[] = []): void => {
       if (text.trim() === '') return
       // Shown before the handler has said anything, and identified so that the
       // Frame for these exact words takes this Message's place rather than
       // being added beside it.
       const at = mark()
       apply({ type: 'sent', at, text })
-      void will({ type: 'prompt', text }).then((refused) => {
+      // Absent rather than empty when nothing was pasted: an always-present
+      // `images: []` would change what every ordinary Turn puts on the wire.
+      const event: PromptEvent =
+        images.length === 0 ? { type: 'prompt', text } : { type: 'prompt', text, images }
+      void will(event).then((refused) => {
         if (refused !== undefined) apply({ type: 'unsent', at, why: refused })
       })
     },
     [will],
+  )
+
+  /**
+   * Where a held picture can be asked for. The endpoint is the hook's, so
+   * composing this is the hook's job rather than a container's — and a handle
+   * travels as a query parameter, never as a path segment, so there is nothing
+   * here for a `../` to traverse even before the host's map lookup refuses it.
+   */
+  const imageSrc = useCallback(
+    (handle: string): string =>
+      `${endpoint}${endpoint.includes('?') ? '&' : '?'}image=${encodeURIComponent(handle)}`,
+    [endpoint],
   )
 
   const interrupt = useCallback((): void => {
@@ -121,6 +137,7 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   return compact<AgentSession>({
     transcript,
     send,
+    imageSrc,
     interrupt,
     mode,
     effort,
@@ -168,8 +185,24 @@ export type AgentFetch = (
 export type AgentSession = {
   /** What is on screen now, from everything that has happened. */
   transcript: Transcript
-  /** Wills a prompt Event. Whitespace alone starts no Turn. */
-  send(text: string): void
+  /**
+   * Wills a prompt Event. Whitespace alone starts no Turn.
+   *
+   * Pictures travel **ahead of the words** — the handler puts them there,
+   * because a picture before the words about it reads better to the model.
+   * They are payloads rather than handles, and that is the one direction the
+   * handle rule does not run in: a handle is something the host minted, so a
+   * person pasting a screenshot has none to name yet.
+   */
+  send(text: string, images?: PromptImage[]): void
+  /**
+   * Where to ask the host for a picture it is holding, by the handle it minted.
+   * A Message names a handle and never a location, so this is the only thing
+   * that turns one into something a browser can fetch — and what it makes is a
+   * query parameter against this Session's own endpoint, so a handle the host
+   * never minted resolves to nothing rather than to a file.
+   */
+  imageSrc(handle: string): string
   /** Wills an interrupt Event. The Turn ends when the handler says it did. */
   interrupt(): void
   /**

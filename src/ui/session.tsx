@@ -2,10 +2,12 @@
 
 import * as React from 'react'
 
+import type { PromptImage } from '../core/event.ts'
 import type { SlashCommandInfo } from '../core/frame.ts'
 import type {
   CompactedMessage,
   HookMessage,
+  ImageMessage,
   Message,
   OutcomeMessage,
   RecallMessage,
@@ -76,6 +78,8 @@ export function ClaudeSession({
   className?: string
 }) {
   const [text, setText] = React.useState('')
+  /** Pictures pasted in and not yet sent, in the order they were pasted. */
+  const [pasted, setPasted] = React.useState<Pasted[]>([])
   /** Dismissed by esc, and only until the words change. */
   const [dismissed, setDismissed] = React.useState(false)
   const [highlighted, setHighlighted] = React.useState(0)
@@ -122,7 +126,7 @@ export function ClaudeSession({
         {arrange(transcript.messages, threads).map((entry) => (
           // The Transcript is append-and-patch-the-tail, so a Message's index
           // is stable for as long as it is on screen.
-          <Entry key={entry.at} entry={entry} threads={byThread} />
+          <Entry key={entry.at} entry={entry} threads={byThread} src={session.imageSrc} />
         ))}
       </div>
 
@@ -164,56 +168,166 @@ export function ClaudeSession({
 
       <SlashMenu commands={offered} active={active} onHighlight={setHighlighted} />
 
-      <ClaudePrompt
-        value={text}
-        onChange={(event) => say(event.target.value)}
-        onKeyDown={(event) => {
-          if (offered.length === 0) return
-          const chosen = offered[active]
+      <Attachments pasted={pasted} onRemove={(at) => setPasted(without(pasted, at))} />
 
-          if (event.key === 'ArrowDown') {
-            event.preventDefault()
-            setHighlighted((at) => (at + 1) % offered.length)
-          } else if (event.key === 'ArrowUp') {
-            event.preventDefault()
-            setHighlighted((at) => (at - 1 + offered.length) % offered.length)
-          } else if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && chosen) {
-            // Takes the highlighted command instead of sending. Sending `/c`
-            // would run a command nobody has, and would do it while a menu was
-            // on screen saying `/c` is not yet one. `preventDefault` is what
-            // `ClaudePrompt` reads to know its own submit was spoken for.
-            event.preventDefault()
-            say(`/${bare(chosen.name)} `)
-          } else if (event.key === 'Escape') {
-            // The Session binds esc to interrupt. While a menu is open esc is
-            // the menu's, so dismissing a palette does not kill the Turn behind
-            // it — which is why this stops here rather than bubbling.
-            event.preventDefault()
-            event.stopPropagation()
-            setDismissed(true)
-          }
+      {/* Paste is read here rather than on `ClaudePrompt`, which takes no
+          `onPaste` and stays exactly as it was vendored. React's paste event
+          bubbles, so listening on the wrapper is wiring rather than a change
+          to the component. */}
+      <div
+        onPaste={(event) => {
+          const files = pictures(event.clipboardData)
+          // Words are still words. Taking every paste would quietly stop a
+          // stack trace pasting into the composer the day pictures landed —
+          // and the insertion is the browser's default action, so swallowing
+          // it leaves nothing on screen to notice.
+          if (files.length === 0) return
+          event.preventDefault()
+          void Promise.all(files.map(held)).then((held) => {
+            setPasted((already) => [...already, ...held.filter(there)])
+          })
         }}
-        onSubmit={(value) => {
-          // `send` is what decides whether these words start a Turn — the
-          // container does not second-guess it — but the composer is emptied
-          // either way, as the terminal's is.
-          session.send(value)
-          say('')
-        }}
-        placeholder={placeholder}
-        mode={session.mode}
-        effort={session.effort}
-        onEffortChange={session.setEffort}
-        // `onModeChange` is deliberately left unset, which is what makes the
-        // mode line inert chrome. `session.mode` is what the runtime reported
-        // having loaded, and ADR-0001 is enforced by the wire rather than
-        // merely asserted: an `AgentEvent` is a prompt or an interrupt, so
-        // there is no Event a mode change could travel on. Cycling it here
-        // would change what the composer says without changing what runs —
-        // a control that lies. It stays unset until such an Event exists.
-      />
+      >
+        <ClaudePrompt
+          value={text}
+          onChange={(event) => say(event.target.value)}
+          onKeyDown={(event) => {
+            if (offered.length === 0) return
+            const chosen = offered[active]
+
+            if (event.key === 'ArrowDown') {
+              event.preventDefault()
+              setHighlighted((at) => (at + 1) % offered.length)
+            } else if (event.key === 'ArrowUp') {
+              event.preventDefault()
+              setHighlighted((at) => (at - 1 + offered.length) % offered.length)
+            } else if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && chosen) {
+              // Takes the highlighted command instead of sending. Sending `/c`
+              // would run a command nobody has, and would do it while a menu was
+              // on screen saying `/c` is not yet one. `preventDefault` is what
+              // `ClaudePrompt` reads to know its own submit was spoken for.
+              event.preventDefault()
+              say(`/${bare(chosen.name)} `)
+            } else if (event.key === 'Escape') {
+              // The Session binds esc to interrupt. While a menu is open esc is
+              // the menu's, so dismissing a palette does not kill the Turn behind
+              // it — which is why this stops here rather than bubbling.
+              event.preventDefault()
+              event.stopPropagation()
+              setDismissed(true)
+            }
+          }}
+          onSubmit={(value) => {
+            // `send` is what decides whether these words start a Turn — the
+            // container does not second-guess it — but the composer is emptied
+            // either way, as the terminal's is.
+            session.send(
+              value,
+              pasted.map((one) => one.image),
+            )
+            say('')
+            // The pictures go with the words. Left behind they would be sent
+            // again with the next Turn, which is the composer showing one
+            // thing and the wire carrying another.
+            setPasted([])
+          }}
+          placeholder={placeholder}
+          mode={session.mode}
+          effort={session.effort}
+          onEffortChange={session.setEffort}
+          // `onModeChange` is deliberately left unset, which is what makes the
+          // mode line inert chrome. `session.mode` is what the runtime reported
+          // having loaded, and ADR-0001 is enforced by the wire rather than
+          // merely asserted: an `AgentEvent` is a prompt or an interrupt, so
+          // there is no Event a mode change could travel on. Cycling it here
+          // would change what the composer says without changing what runs —
+          // a control that lies. It stays unset until such an Event exists.
+        />
+      </div>
     </div>
   )
+}
+
+/**
+ * A picture pasted in and not yet sent: the payload that will travel, and the
+ * name it is shown under so a person can tell two of them apart.
+ */
+type Pasted = { name: string; image: PromptImage }
+
+/**
+ * What the composer is about to send along with the words.
+ *
+ * A paste that vanished into a variable is a paste the person cannot check,
+ * cannot count and cannot take back — and a screenshot is exactly the thing
+ * somebody pastes by accident. Each one is removable, and nothing is drawn when
+ * nothing is pasted: an empty tray is a tray in the way.
+ */
+function Attachments({ pasted, onRemove }: { pasted: Pasted[]; onRemove: (at: number) => void }) {
+  if (pasted.length === 0) return null
+  return (
+    <ul className="cc:flex cc:min-w-0 cc:flex-wrap cc:gap-2" style={{ color: 'var(--cc-fg-dim)' }}>
+      {pasted.map((one, at) => (
+        <li key={`${one.name}-${at}`} data-attachment={one.name} className="cc:min-w-0">
+          <span aria-hidden>▣ </span>
+          {one.name}{' '}
+          <button
+            type="button"
+            aria-label={`Remove ${one.name}`}
+            onClick={() => onRemove(at)}
+            className="cc:m-0 cc:cursor-pointer cc:appearance-none cc:border-0 cc:bg-transparent cc:p-0 cc:[font:inherit] cc:text-inherit"
+          >
+            ✕
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** The list without the one at `at`. */
+function without<T>(items: T[], at: number): T[] {
+  return items.filter((_, index) => index !== at)
+}
+
+/**
+ * The pictures on the clipboard, and only the pictures.
+ *
+ * A clipboard carrying a file the host would not hold is left alone rather than
+ * carried as far as the handler and refused there: the person would have lost
+ * the paste and been told nothing about why.
+ */
+function pictures(clipboard: DataTransfer | null): File[] {
+  const files: File[] = [...(clipboard?.files ?? [])]
+  return files.filter((file) => HOLDABLE.has(file.type))
+}
+
+/**
+ * What the host will hold, restated here so a paste it would refuse never
+ * leaves the browser. The handler enforces this again on the way in — this is
+ * a courtesy to the person, not the check that matters.
+ */
+const HOLDABLE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+
+/**
+ * A pasted file as a payload the wire can carry: base64, and no `data:` prefix.
+ * A data URI is a location with the bytes inlined, and the Event vocabulary
+ * takes payloads rather than locations for exactly that reason.
+ */
+async function held(file: File): Promise<Pasted | undefined> {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    let binary = ''
+    for (const byte of bytes) binary += String.fromCharCode(byte)
+    return { name: file.name === '' ? file.type : file.name, image: { mediaType: file.type, data: btoa(binary) } }
+  } catch {
+    // A clipboard entry that would not read is one picture missing, never a
+    // composer that stopped taking words.
+    return undefined
+  }
+}
+
+function there<T>(value: T | undefined): value is T {
+  return value !== undefined
 }
 
 /**
@@ -320,18 +434,19 @@ function bare(name: string): string {
  *
  * The `switch` is exhaustive and the fallback is visible on purpose: a Message
  * kind this container has no chrome for yet is still an entry a viewer can
- * see, so a Transcript never silently drops something the agent said. `image`
- * gets its real surface in #12; that is what `Undrawn` stands in for, not what
- * it should look like.
+ * see, so a Transcript never silently drops something the agent said.
  */
 function Entry({
   entry,
   threads,
+  src,
 }: {
   entry: Arranged
   threads: ReadonlyMap<string, ThreadReading>
+  /** How a picture's handle becomes something a browser can ask for. */
+  src: (handle: string) => string
 }) {
-  const drawn = draw(entry.message)
+  const drawn = draw(entry.message, src)
   const nested = entry.nested ?? []
   // A Message that draws nothing takes no room — an empty row is still the
   // screen holding space for something it will not explain. `draw` is what
@@ -352,7 +467,7 @@ function Entry({
           className="cc:mt-2 cc:flex cc:min-w-0 cc:flex-col cc:gap-2"
         >
           {nested.map((inner) => (
-            <Entry key={inner.at} entry={inner} threads={threads} />
+            <Entry key={inner.at} entry={inner} threads={threads} src={src} />
           ))}
         </div>
       )}
@@ -360,7 +475,7 @@ function Entry({
   )
 }
 
-function draw(message: Message): React.ReactNode {
+function draw(message: Message, src: (handle: string) => string): React.ReactNode {
   switch (message.kind) {
     case 'prompt':
       return <ClaudeMessage role="user">{message.text}</ClaudeMessage>
@@ -400,8 +515,8 @@ function draw(message: Message): React.ReactNode {
       return message.memories.length === 0 ? null : <Recall message={message} />
     case 'hook':
       return <Hook message={message} />
-    case 'image': // #12
-      return <Undrawn kind={message.kind} />
+    case 'image':
+      return <Picture message={message} src={src} />
     default: {
       // Exhaustive at compile time — a kind added to the vocabulary has to be
       // decided here — and still visible at run time, because a Transcript
@@ -665,6 +780,78 @@ function Hook({ message }: { message: HookMessage }) {
       tone={failed ? 'var(--cc-error)' : 'var(--cc-fg-muted)'}
     />
   )
+}
+
+/**
+ * A picture in the Transcript — one the person pasted, or one the agent
+ * captured and put there rather than describing.
+ *
+ * Drawn from `handle` and from nothing else. A Message names a handle the host
+ * minted, never a path, a URL or a data URI, because a Message that could name
+ * a location is a Message that could fetch from one; `src` is the hook turning
+ * that handle into a request against this Session's own endpoint, where it
+ * meets a map lookup. A handle the host did not mint has nothing behind it.
+ *
+ * An image with no handle is not a bug and is not hidden: it is one the host
+ * could not hold — the SDK gave only a location for it, or its payload was not
+ * an image — and the marker is drawn without a picture. It arrived, so a
+ * Transcript that dropped it would be quietly lying about what was said.
+ */
+function Picture({ message, src }: { message: ImageMessage; src: (handle: string) => string }) {
+  const handle = message.handle
+  return (
+    <div
+      data-image={message.toolCallId === undefined ? 'pasted' : 'shown'}
+      className="cc:flex cc:min-w-0 cc:flex-col cc:gap-1"
+      style={{ color: 'var(--cc-fg-muted)' }}
+    >
+      <span>
+        <span aria-hidden>▣ </span>
+        {describing(message)}
+        {handle === undefined ? ' — not held' : ''}
+      </span>
+      {handle === undefined ? null : (
+        <img
+          src={src(handle)}
+          alt={describing(message)}
+          className="cc:max-w-full cc:rounded-sm"
+          style={{ border: '1px solid var(--cc-rule)' }}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * What the picture shows, for someone who cannot see it — and it is required,
+ * which is why it is composed here rather than read off the Message.
+ *
+ * **There is no author-supplied alt text to carry.** Verified against the SDK
+ * rather than assumed: `ImageBlockParam` is `{ source, type, cache_control }`,
+ * and the image block in `sdk-tools.d.ts` is `{ base64, type, originalSize,
+ * dimensions }`. Neither has a description in it, so nothing upstream can
+ * describe a picture and no Frame can carry one. The next person will assume
+ * otherwise and go looking; this is the answer.
+ *
+ * In forge the alt *did* come from the agent, through an MCP tool whose
+ * parameter was documented "What the picture shows, for someone who cannot see
+ * it. Required." We have no such tool — agent-driven UI is explicitly out of
+ * v0.1 — so what is composed here is the provenance instead, which is the one
+ * thing the Message does carry and the one thing that actually differs between
+ * a screenshot the person pasted and one the agent captured. If that tool ever
+ * lands, alt becomes a wire field and this is where it replaces this sentence.
+ */
+function describing(message: ImageMessage): string {
+  const kind = message.mediaType === undefined ? 'Image' : `${type(message.mediaType)} image`
+  return message.toolCallId === undefined
+    ? `${kind} pasted into the prompt`
+    : `${kind} the agent put in the Transcript, from tool call ${message.toolCallId}`
+}
+
+/** `image/png` reads as `PNG`; anything unfamiliar is left as it arrived. */
+function type(mediaType: string): string {
+  const [family, subtype] = mediaType.split('/')
+  return family === 'image' && subtype !== undefined ? subtype.toUpperCase() : mediaType
 }
 
 /**
