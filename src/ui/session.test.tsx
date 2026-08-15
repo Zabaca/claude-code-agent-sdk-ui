@@ -524,7 +524,200 @@ test('an Event the handler refused is reported rather than swallowed', async () 
   view.unmount()
 })
 
+test('typing a slash opens a menu that filters as the person types', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'commands', commands: COMMANDS })
+  })
+
+  // Nothing typed, so nothing offered: a palette on screen before it was
+  // asked for is a palette in the way.
+  expect(there(screen.queryByRole('listbox'))).toBe(false)
+
+  await type('/')
+  expect(offered()).toEqual(['/clear', '/compact', '/usage'])
+
+  // `/usage` is offered here too, because its alias `cost` starts with a `c`.
+  // Filtering names alone would hide it from the letter people actually type.
+  await type('/c')
+  expect(offered()).toEqual(['/clear', '/compact', '/usage'])
+
+  await type('/com')
+  expect(offered()).toEqual(['/compact'])
+
+  // Past the name and into the arguments, the menu has done its job and gets
+  // out of the way.
+  await type('/compact focus on the tests')
+  expect(there(screen.queryByRole('listbox'))).toBe(false)
+  view.unmount()
+})
+
+test('a command says what it takes and what else it answers to', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'commands', commands: COMMANDS })
+  })
+  await type('/u')
+
+  const row = screen.getByRole('option').textContent ?? ''
+  expect(row).toContain('/usage')
+  expect(row).toContain('Show what this Session has spent')
+  // The two things the runtime describes that a bare name cannot: what to type
+  // after it, and what else resolves to it. Drop either and the menu says a
+  // command exists without saying how to use it or that `/cost` is the same
+  // thing — which is what this ticket is for.
+  expect(row).toContain('[window]')
+  expect(row).toContain('/cost')
+  expect(row).toContain('/stats')
+  view.unmount()
+})
+
+test('an alias finds the command it resolves to', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'commands', commands: COMMANDS })
+  })
+  await type('/cos')
+
+  // Filtering on names alone leaves `/cost` looking like a command that does
+  // not exist, which is the opposite of what advertising an alias is for.
+  expect(offered()).toEqual(['/usage'])
+  view.unmount()
+})
+
+test('the menu is keyboard-operable, and completing it does not will a Turn', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await act(async () => {
+    fake.frame({ kind: 'commands', commands: COMMANDS })
+  })
+  await type('/c')
+
+  expect(offered()).toEqual(['/clear', '/compact', '/usage'])
+  expect(active()).toBe('/clear')
+  await press('ArrowDown')
+  expect(active()).toBe('/compact')
+  await press('ArrowUp')
+  expect(active()).toBe('/clear')
+  // Round the ends, so the list is reachable from either direction.
+  await press('ArrowUp')
+  expect(active()).toBe('/usage')
+
+  // Enter takes the highlighted command rather than sending what is typed:
+  // sending `/c` would run a command nobody has — and would do it while a
+  // menu was on screen saying `/c` was not yet a command.
+  await press('Enter')
+  expect(wire.posted).toEqual([])
+  expect(composer().value).toBe('/usage ')
+  expect(there(screen.queryByRole('listbox'))).toBe(false)
+
+  // With the menu gone, Enter means what it always means.
+  await enter()
+  expect(wire.posted).toEqual([{ body: { type: 'prompt', text: '/usage ' } }])
+  view.unmount()
+})
+
+test('esc closes the menu without interrupting the Turn behind it', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await act(async () => {
+    fake.frame({ kind: 'commands', commands: COMMANDS })
+    fake.frame({ kind: 'prompt', text: 'write a novel' })
+  })
+  await type('/c')
+
+  await act(async () => escape())
+
+  // The Session binds esc to interrupt. With a menu open, esc is the menu's:
+  // dismissing a palette must not kill the Turn running behind it.
+  expect(wire.posted).toEqual([])
+  expect(there(screen.queryByRole('listbox'))).toBe(false)
+
+  // And esc goes back to meaning interrupt the moment the menu is gone.
+  await act(async () => escape())
+  expect(wire.posted).toEqual([{ body: { type: 'interrupt' } }])
+  view.unmount()
+})
+
+test('a command the runtime advertises mid-Session is reachable at once', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'commands', commands: COMMANDS })
+  })
+  await type('/dep')
+  expect(there(screen.queryByRole('listbox'))).toBe(false)
+
+  // `commands_changed` — a skill discovered while the agent worked in a
+  // subdirectory. REPLACE semantics, so the old list goes with it.
+  await act(async () => {
+    fake.frame({
+      kind: 'commands',
+      commands: [{ name: 'deploy', description: 'Ship it', argumentHint: '<env>' }],
+    })
+  })
+
+  expect(offered()).toEqual(['/deploy'])
+  await type('/c')
+  expect(there(screen.queryByRole('listbox'))).toBe(false)
+  view.unmount()
+})
+
+test('a runtime that advertises nothing offers nothing', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await type('/')
+
+  // No empty box, and no invented defaults: a menu that listed commands the
+  // runtime never advertised would be a palette of things that do not run.
+  expect(there(screen.queryByRole('listbox'))).toBe(false)
+  view.unmount()
+})
+
 // --- driving the seam ---------------------------------------------------------
+
+/** What a runtime advertises, described — the shape `supportedCommands()` gives. */
+const COMMANDS = [
+  { name: 'clear', description: 'Clear the conversation' },
+  { name: 'compact', description: 'Summarise the conversation', argumentHint: '[focus]' },
+  {
+    name: 'usage',
+    description: 'Show what this Session has spent',
+    argumentHint: '[window]',
+    aliases: ['cost', 'stats'],
+  },
+]
+
+/** The command names the menu is offering, in the order it offers them. */
+function offered(): string[] {
+  return screen.queryAllByRole('option').map((row) => row.getAttribute('data-command') ?? '')
+}
+
+/** The one row Enter would take. */
+function active(): string | undefined {
+  return screen
+    .queryAllByRole('option')
+    .find((row) => row.getAttribute('aria-selected') === 'true')
+    ?.getAttribute('data-command') as string | undefined
+}
+
+function press(key: string): Promise<void> {
+  return act(async () => {
+    fireEvent.keyDown(composer(), { key })
+  })
+}
 
 function composer(): HTMLInputElement {
   return screen.getByLabelText('Prompt') as HTMLInputElement
