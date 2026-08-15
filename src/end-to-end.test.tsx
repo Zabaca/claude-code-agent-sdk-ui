@@ -327,8 +327,10 @@ test('a pasted screenshot reaches the model, and comes back as a handle rather t
     { type: 'text', text: 'why is this button clipped' },
   ])
 
-  // The runtime echoes the Turn back — image block first, as it was sent.
-  await said(sdk, init('sess-image'), askedWith(PIXEL, 'why is this button clipped'))
+  // The runtime says nothing back about the Turn — it does not echo a prompt
+  // pushed into its input, which is why the handler retains the words and the
+  // picture itself. The picture on screen below got there that way.
+  await said(sdk, init('sess-image'))
 
   const picture = screen.getByRole('img') as HTMLImageElement
   expect(picture.alt).not.toBe('')
@@ -752,21 +754,6 @@ function commandsChanged(): ClassifyInput {
     type: 'system',
     subtype: 'commands_changed',
     commands: [{ name: 'deploy', description: 'Ship it', argumentHint: '<env>' }],
-  }
-}
-
-/** The runtime echoing back a Turn that had a picture in front of the words. */
-function askedWith(data: string, text: string): ClassifyInput {
-  return {
-    type: 'user',
-    parent_tool_use_id: null,
-    message: {
-      role: 'user',
-      content: [
-        { type: 'image', source: { type: 'base64', media_type: 'image/png', data } },
-        { type: 'text', text },
-      ],
-    },
   }
 }
 

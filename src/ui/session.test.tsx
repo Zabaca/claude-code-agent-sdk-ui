@@ -1726,6 +1726,45 @@ test('a Frame arriving while the reader is at the tail follows it', async () => 
   view.unmount()
 })
 
+test('following to the end does not read as having scrolled away from it', async () => {
+  // Where the pill came from. The effect recorded its own scroll as having
+  // reached `scrollHeight` — but the furthest anything can scroll is
+  // `scrollHeight - clientHeight`, a whole viewport short of that. So the event
+  // its own scroll caused arrived looking like a jump backwards of exactly one
+  // screen, which is a drag, and the transcript unpinned itself every time it
+  // followed.
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  const page = document.scrollingElement as HTMLElement
+  where(page, { scrollHeight: 4000, scrollTop: 0, clientHeight: 800 })
+  // A real scroller lands at the furthest it can go, not at its own height.
+  page.scrollTo = ((options?: ScrollToOptions | number) => {
+    if (typeof options === 'object' && typeof options.top === 'number') {
+      where(page, {
+        scrollHeight: 4000,
+        scrollTop: Math.min(options.top, 4000 - 800),
+        clientHeight: 800,
+      })
+    }
+  }) as HTMLElement['scrollTo']
+
+  await act(async () => fake.frame({ kind: 'text', text: 'following along' }))
+  expect(page.scrollTop).toBe(3200)
+
+  // And the stream ran on before the event was read, which is the ordinary
+  // case at speed: the scroll no longer reaches the end, so the only thing
+  // left to judge it by is where the reader was — and the effect had recorded
+  // somewhere the scroller can never reach.
+  where(page, { scrollHeight: 9000, scrollTop: 3200, clientHeight: 800 })
+  await act(async () => {
+    page.dispatchEvent(new Event('scroll', { bubbles: false }))
+  })
+
+  expect(document.querySelector('[data-jump]')).toBeNull()
+  view.unmount()
+})
+
 test('content growing under a reader who has not moved does not stop the following', async () => {
   // The way this broke in a browser. The follow effect scrolls, that scroll
   // fires an event, and by the time the event is read the stream has added

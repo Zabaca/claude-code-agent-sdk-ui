@@ -17,11 +17,14 @@ test('a Session streams Frames over SSE, each event carrying its index as id', a
   fake.say(says('Hello there'))
   fake.say(settled())
 
-  const events = await read(stream, 6)
+  const events = await read(stream, 7)
 
-  expect(events.map((event) => event.id)).toEqual(['0', '1', '2', '3', '4', '5'])
-  expect(events.map((event) => event.name)).toEqual(Array(6).fill('frame'))
+  expect(events.map((event) => event.id)).toEqual(['0', '1', '2', '3', '4', '5', '6'])
+  expect(events.map((event) => event.name)).toEqual(Array(7).fill('frame'))
+  // The person's words first: the runtime does not say them back, so the
+  // handler retains them itself or the log holds answers to nothing.
   expect(events.map((event) => event.data['kind'])).toEqual([
+    'prompt',
     'session',
     'harness',
     'commands',
@@ -29,7 +32,8 @@ test('a Session streams Frames over SSE, each event carrying its index as id', a
     'settled',
     'cost',
   ])
-  expect(events[0]?.data).toEqual({ kind: 'session', sessionId: 'session-abc' })
+  expect(events[0]?.data).toEqual({ kind: 'prompt', text: 'hello' })
+  expect(events[1]?.data).toEqual({ kind: 'session', sessionId: 'session-abc' })
 })
 
 test('deltas stream live but the retained log holds coalesced whole Messages', async () => {
@@ -47,9 +51,11 @@ test('deltas stream live but the retained log holds coalesced whole Messages', a
   fake.say(says('Hello'))
   fake.say(settled())
 
-  const events = await read(stream, 6)
+  const events = await read(stream, 7)
 
   expect(events.map((event) => event.name)).toEqual([
+    // The words are retained before anything is asked of the runtime.
+    'frame',
     'partial',
     'partial',
     'partial',
@@ -57,19 +63,24 @@ test('deltas stream live but the retained log holds coalesced whole Messages', a
     'frame',
     'frame',
   ])
-  expect(events.slice(0, 3).map((event) => event.data)).toEqual([
+  expect(events.slice(1, 4).map((event) => event.data)).toEqual([
     { block: 0, kind: 'text', text: 'Hel' },
     { block: 0, kind: 'text', text: 'Hello' },
     { block: 0, kind: 'text', text: 'Hello', done: true },
   ])
   // Partials carry no `id:`, so they never move the browser's resume cursor.
-  expect(events.slice(0, 3).map((event) => event.id)).toEqual([undefined, undefined, undefined])
-  expect(events[3]).toEqual({ id: '0', name: 'frame', data: { kind: 'text', text: 'Hello' } })
+  expect(events.slice(1, 4).map((event) => event.id)).toEqual([undefined, undefined, undefined])
+  expect(events[4]).toEqual({ id: '1', name: 'frame', data: { kind: 'text', text: 'Hello' } })
 
   // What the log kept is whole Messages — a cold reload replays no partials.
-  const replayed = await read(await handler(open()), 3)
-  expect(replayed.map((event) => event.name)).toEqual(['frame', 'frame', 'frame'])
-  expect(replayed.map((event) => event.data['kind'])).toEqual(['text', 'settled', 'cost'])
+  const replayed = await read(await handler(open()), 4)
+  expect(replayed.map((event) => event.name)).toEqual(['frame', 'frame', 'frame', 'frame'])
+  expect(replayed.map((event) => event.data['kind'])).toEqual([
+    'prompt',
+    'text',
+    'settled',
+    'cost',
+  ])
 })
 
 test('a dropped connection resumes from Last-Event-ID', async () => {
@@ -79,12 +90,12 @@ test('a dropped connection resumes from Last-Event-ID', async () => {
   await handler(prompt('hello'))
   fake.say(init('session-abc'))
   fake.say(says('Hello there'))
-  await read(await handler(open()), 4)
+  await read(await handler(open()), 5)
 
-  const resumed = await read(await handler(open('1')), 2)
+  const resumed = await read(await handler(open('1')), 3)
 
-  expect(resumed.map((event) => event.id)).toEqual(['2', '3'])
-  expect(resumed.map((event) => event.data['kind'])).toEqual(['commands', 'text'])
+  expect(resumed.map((event) => event.id)).toEqual(['2', '3', '4'])
+  expect(resumed.map((event) => event.data['kind'])).toEqual(['harness', 'commands', 'text'])
 })
 
 test('an interrupt ends the Turn as idle, not as a failure', async () => {
@@ -97,11 +108,11 @@ test('an interrupt ends the Turn as idle, not as a failure', async () => {
   fake.say(says('Once upon'))
   await handler(interrupt())
 
-  const events = await read(stream, 2)
+  const events = await read(stream, 3)
 
   expect(fake.interrupts).toBe(1)
-  expect(events[1]).toEqual({
-    id: '1',
+  expect(events[2]).toEqual({
+    id: '2',
     name: 'frame',
     data: { kind: 'settled', turns: 1, durationMs: 30, terminalReason: 'aborted_streaming' },
   })
@@ -116,9 +127,9 @@ test('an interrupt that kills the query still ends the Turn as idle', async () =
   await handler(prompt('write a novel'))
   await handler(interrupt())
 
-  const events = await read(stream, 1)
+  const events = await read(stream, 2)
 
-  expect(events[0]?.data).toEqual({ kind: 'settled' })
+  expect(events[1]?.data).toEqual({ kind: 'settled' })
 })
 
 test('a query that breaks on its own does fail the Turn', async () => {
@@ -129,9 +140,9 @@ test('a query that breaks on its own does fail the Turn', async () => {
   await handler(prompt('hello'))
   fake.break(new Error('the runtime went away'))
 
-  const events = await read(stream, 1)
+  const events = await read(stream, 2)
 
-  expect(events[0]?.data).toEqual({
+  expect(events[1]?.data).toEqual({
     kind: 'failed',
     subtype: 'error_during_execution',
     reason: 'the runtime went away',
@@ -148,10 +159,10 @@ test('`resume` continues a prior Session, and the `session` Frame lands at init'
   expect(fake.calls[0]?.options.resume).toBe('session-prior')
 
   fake.say(init('session-prior'))
-  const events = await read(stream, 1)
+  const events = await read(stream, 2)
 
-  expect(events[0]).toEqual({
-    id: '0',
+  expect(events[1]).toEqual({
+    id: '1',
     name: 'frame',
     data: { kind: 'session', sessionId: 'session-prior' },
   })
@@ -268,7 +279,7 @@ test('describing the commands never stops messages being pulled', async () => {
   fake.say(says('Hello there'))
   fake.say(settled())
 
-  const events = await before(2000, read(stream, 7))
+  const events = await before(2000, read(stream, 8))
   const kinds = events.map((event) => event.data['kind'])
 
   // The whole Turn arrived. Under the defect none of these three exist.
@@ -302,17 +313,17 @@ test('a menu that could not be described does not fail the Turn', async () => {
   fake.say(says('Hello there'))
   fake.say(settled())
 
-  const events = await before(2000, read(stream, 6))
+  const events = await before(2000, read(stream, 7))
   const kinds = events.map((event) => event.data['kind'])
 
   // Not caught, the rejection travels up the observation task and is read as a
   // query that broke — so a Turn that ran perfectly ends `failed`, at the
   // moment knowing what you can type is worth more than usual.
   expect(kinds).not.toContain('failed')
-  expect(kinds).toEqual(['session', 'harness', 'commands', 'text', 'settled', 'cost'])
+  expect(kinds).toEqual(['prompt', 'session', 'harness', 'commands', 'text', 'settled', 'cost'])
 
   // And the names `init` advertised are still there to type against.
-  expect(events[2]?.data['commands']).toEqual([{ name: 'compact' }])
+  expect(events[3]?.data['commands']).toEqual([{ name: 'compact' }])
 })
 
 test('a runtime that describes nothing does not erase the names init advertised', async () => {
@@ -326,7 +337,7 @@ test('a runtime that describes nothing does not erase the names init advertised'
   fake.describes([])
   fake.say(settled())
 
-  const events = await before(2000, read(stream, 5))
+  const events = await before(2000, read(stream, 6))
   const commands = events.filter((event) => event.data['kind'] === 'commands')
 
   // REPLACE semantics: an empty answer retained as a Frame would blank a menu
@@ -354,8 +365,9 @@ test('a query that cannot describe itself at all is simply not asked', async () 
   fake.say(init('session-abc'))
   fake.say(settled())
 
-  const events = await before(2000, read(stream, 5))
+  const events = await before(2000, read(stream, 6))
   expect(events.map((event) => event.data['kind'])).toEqual([
+    'prompt',
     'session',
     'harness',
     'commands',
@@ -398,7 +410,7 @@ test('what the log retains for an image is a handle — never the bytes, never a
   fake.say(pasted(PIXEL))
   fake.say(shows('toolu_shot', SHOT))
 
-  const events = await read(stream, 6)
+  const events = await read(stream, 7)
   const images = events.filter((event) => event.data['kind'] === 'image')
 
   // The boundary is here, not in the render. `classify` stays lossless and
@@ -438,7 +450,7 @@ test('a minted handle resolves to the image; every handle nobody minted resolves
   fake.say(init('sess-img'))
   fake.say(pasted(PIXEL))
 
-  const events = await read(stream, 4)
+  const events = await read(stream, 5)
   const minted = String(events.find((event) => event.data['kind'] === 'image')?.data['handle'])
 
   // Both cases through the one screen, which is the only way "an unminted
@@ -499,7 +511,7 @@ test('a handle is minted per hold, so the same picture twice is two handles', as
   fake.say(pasted(PIXEL))
   fake.say(pasted(PIXEL))
 
-  const events = await read(stream, 5)
+  const events = await read(stream, 6)
   const handles = events
     .filter((event) => event.data['kind'] === 'image')
     .map((event) => String(event.data['handle']))
@@ -525,7 +537,7 @@ test('an image the SDK gave only a location for is held as no handle at all', as
   fake.say(init('sess-url'))
   fake.say(remote('https://example.test/secret.png'))
 
-  const events = await read(stream, 4)
+  const events = await read(stream, 5)
   const image0 = events.find((event) => event.data['kind'] === 'image')?.data ?? {}
 
   // The host has no bytes, so there is nothing to mint against — and the one
@@ -550,7 +562,7 @@ test('a held image cannot be served as anything but an image', async () => {
   fake.say(init('sess-sniff'))
   fake.say(pasted(PIXEL, 'text/html'))
 
-  const events = await read(stream, 4)
+  const events = await read(stream, 5)
   const held = events.find((event) => event.data['kind'] === 'image')?.data ?? {}
 
   // The media type comes off the wire, so it is attacker-shaped in exactly the
@@ -777,6 +789,73 @@ async function before<T>(ms: number, work: Promise<T>): Promise<T> {
     if (timer) clearTimeout(timer)
   }
 }
+
+test("retains the person's words, because the runtime never says them back", async () => {
+  // The SDK does not echo a prompt pushed into its input stream. Four live
+  // Turns produced `session`, `harness`, `commands`, `text`, `settled`, `cost`
+  // and not one `prompt` Frame — so the only record of what was asked was the
+  // optimistic Message in the browser, which is React state and does not
+  // survive a reload. The log is what a reconnect replays, and it had the
+  // answers with the questions missing.
+  //
+  // Retained here rather than fixed in the browser because the log is the
+  // record: a Session resumed on another machine has to show what was asked.
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('hi'))
+
+  fake.say(init('session-abc'))
+  fake.say(says('Hello there'))
+  fake.say(settled())
+
+  const events = await read(stream, 6)
+  const frames = events.filter((event) => event.name === 'frame').map((event) => event.data)
+
+  // The words first, then what the runtime made of them — the order they
+  // happened in, and the order replay has always produced.
+  expect(frames.map((frame) => frame['kind'])).toEqual([
+    'prompt',
+    'session',
+    'harness',
+    'commands',
+    'text',
+    'settled',
+  ])
+  expect(frames[0]).toEqual({ kind: 'prompt', text: 'hi' })
+})
+
+test('retains a pasted picture as a handle, ahead of the words about it', async () => {
+  // Same hole, same reason: an image block pushed to the SDK is not said back
+  // either, so a screenshot pasted in live mode reached the model and appeared
+  // nowhere. Minted rather than inlined — the log never carries bytes.
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(
+    new Request('http://host/agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'prompt',
+        text: 'why is this clipped',
+        images: [{ mediaType: 'image/png', data: btoa('a screenshot') }],
+      }),
+    }),
+  )
+
+  const events = await read(stream, 2)
+  const frames = events.filter((event) => event.name === 'frame').map((event) => event.data)
+
+  expect(frames.map((frame) => frame['kind'])).toEqual(['image', 'prompt'])
+  expect(frames[0]?.['handle']).toMatch(/^img_/)
+  // Never the bytes, and never a location: the rule holds on the way in as it
+  // does on the way out.
+  expect(frames[0]?.['data']).toBeUndefined()
+  expect(frames[0]?.['url']).toBeUndefined()
+})
 
 /** Reads exactly `count` SSE events off a response, then lets go of the stream. */
 async function read(response: Response, count: number): Promise<SseEvent[]> {

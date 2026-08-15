@@ -141,8 +141,12 @@ export function useFollowing(watched: unknown): Following {
     // Instant, not smooth: this runs per token, and a smooth scroll restarted
     // sixty times a second never arrives.
     scroller.scrollTo({ top: scroller.scrollHeight })
-    // Recorded as ours, so the event this causes is not read as a drag.
-    wasAt.current = scroller.scrollHeight
+    // Where it *landed*, not where it was aimed. The furthest anything can
+    // scroll is a viewport short of its own height, so recording the height
+    // makes the event this scroll causes look like a jump backwards of exactly
+    // one screen — a drag, and the transcript unpins itself on its own scroll
+    // every time the stream grows faster than it can follow.
+    wasAt.current = scroller.scrollTop
   }, [watched])
 
   const resume = React.useCallback((): void => {
@@ -154,7 +158,9 @@ export function useFollowing(watched: unknown): Following {
     resume()
     const scroller = scrollerFor(log.current)
     if (!scroller) return
-    wasAt.current = scroller.scrollHeight
+    // Where it is now, not where it is going: a smooth scroll reports its way
+    // there, and every one of those readings would be behind the destination.
+    wasAt.current = scroller.scrollTop
     scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' })
   }, [resume])
 
