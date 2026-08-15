@@ -181,14 +181,26 @@ export type ToolResultFrame = {
   thread?: string
 }
 
-/** An image in the Transcript — pasted by a person, or shown by the agent. */
+/**
+ * An image in the Transcript — pasted by a person, or shown by the agent.
+ *
+ * `data` and `url` are what the SDK said, because `classify` is lossless. They
+ * are **not** what reaches a browser: the handler substitutes a `handle` for
+ * them before appending to its log, since a Message that could name a location
+ * is a Message that could fetch from one. See `server/images.ts`.
+ */
 export type ImageFrame = {
   kind: 'image'
   mediaType?: string
-  /** Base64 payload, when the image arrived inline. */
+  /** Base64 payload, when the image arrived inline. Never leaves the host. */
   data?: string
-  /** Location, when the image arrived by reference. */
+  /** Location, when the image arrived by reference. Never leaves the host. */
   url?: string
+  /**
+   * What the host minted to name the held bytes. The only thing here a browser
+   * ever sees, and the only thing it can ask the host to resolve.
+   */
+  handle?: string
   /** The tool call that produced it, when the agent showed it. */
   toolCallId?: string
   thread?: string

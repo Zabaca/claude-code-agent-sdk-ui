@@ -1,14 +1,16 @@
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
 
 import { classify, type ClassifyInput } from '../core/classify.ts'
-import type { FailedFrame, Frame, SettledFrame, SlashCommandInfo } from '../core/frame.ts'
+import type { PromptImage } from '../core/event.ts'
+import type { FailedFrame, Frame, ImageFrame, SettledFrame, SlashCommandInfo } from '../core/frame.ts'
 import type { PartialText } from '../core/partial.ts'
+import { imageStore, SERVABLE, type ImageStore } from './images.ts'
 import { pushable, type Pushable } from './pushable.ts'
 
 // The willed half of the vocabulary, and the live text that is neither half,
 // both live in `core` beside the Frames — one glossary, one place. Re-exported
 // here so that everything that reached for them through the handler still can.
-export type { AgentEvent, InterruptEvent, PromptEvent } from '../core/event.ts'
+export type { AgentEvent, InterruptEvent, PromptEvent, PromptImage } from '../core/event.ts'
 export type { PartialText } from '../core/partial.ts'
 
 /**
@@ -60,9 +62,18 @@ export type AgentQueryParams = {
  */
 export type AgentPromptMessage = {
   type: 'user'
-  message: { role: 'user'; content: string }
+  message: { role: 'user'; content: string | AgentPromptBlock[] }
   parent_tool_use_id: null
 }
+
+/**
+ * A block of a prompt that is more than words. The Anthropic `ImageBlockParam`
+ * shape, narrowed to the inline case: the host holds bytes, so it hands over
+ * bytes rather than asking the model to go and fetch something.
+ */
+export type AgentPromptBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
 
 /** Only what this handler ever asks a query for. */
 export type AgentQueryOptions = Pick<
@@ -117,6 +128,12 @@ class AgentSession {
   readonly #options: AgentHandlerOptions
   readonly #log: Frame[] = []
   readonly #listeners = new Set<(chunk: string) => void>()
+  /**
+   * The pictures this Session is holding, each under the handle the host minted
+   * for it. One store per handler is one per Session (ADR-0002), so a handle
+   * from another Session is a key this map never had.
+   */
+  readonly #images: ImageStore = imageStore()
   /** Text and reasoning blocks open right now, keyed by Thread and block index. */
   readonly #open = new Map<string, { kind: 'text' | 'reasoning'; text: string; thread?: string }>()
 
@@ -131,9 +148,42 @@ class AgentSession {
   }
 
   handle(request: Request): Promise<Response> {
-    if (request.method === 'GET') return Promise.resolve(this.#stream(request))
+    if (request.method === 'GET') {
+      // A handle names a picture, so it arrives as a query parameter and never
+      // as a path segment. There is no path here to join, split or normalise —
+      // which is what leaves traversal nothing to traverse.
+      const named = new URL(request.url).searchParams.get('image')
+      if (named !== null) return Promise.resolve(this.#held(named))
+      return Promise.resolve(this.#stream(request))
+    }
     if (request.method === 'POST') return this.#willed(request)
     return Promise.resolve(new Response(null, { status: 405, headers: { allow: 'GET, POST' } }))
+  }
+
+  /**
+   * A held picture, by the handle the host minted for it. A map lookup, and
+   * nothing else: no path arithmetic, and no fetch.
+   *
+   * A handle nobody minted resolves to **nothing** — and to the same nothing
+   * whether it is shaped like a path, guessed from a Session id, or borrowed
+   * from another Session. One empty answer for every "no" is what keeps this
+   * from reporting whether something exists somewhere else.
+   */
+  #held(handle: string): Response {
+    const image = this.#images.resolve(handle)
+    if (!image) return new Response(null, { status: 404 })
+    return new Response(image.bytes as BodyInit, {
+      headers: {
+        // Only ever one of the types the store agreed to hold, never whatever
+        // arrived on the wire — a `text/html` "image" served from this origin
+        // is a script running where the Session lives.
+        'content-type': image.mediaType,
+        'x-content-type-options': 'nosniff',
+        // The bytes behind a handle never change, and the handle is fresh per
+        // hold, so it is safe to keep for as long as the page is open.
+        'cache-control': 'private, max-age=31536000, immutable',
+      },
+    })
   }
 
   // --- the wire ---------------------------------------------------------------
@@ -201,7 +251,15 @@ class AgentSession {
       case 'prompt': {
         const text = str(body?.['text'])
         if (text === undefined) return refuse('a prompt Event needs `text`')
-        await this.#send(text)
+        const images = imagesIn(body?.['images'])
+        // Refused rather than half-carried. Dropping an unreadable picture and
+        // starting the Turn anyway is the silent failure: the words reach the
+        // model with the picture missing, the agent answers about nothing it
+        // saw, and nobody is told which of the two happened.
+        if (images === undefined) {
+          return refuse('a prompt Event\'s `images` are `{ mediaType, data }`, base64, image types only')
+        }
+        await this.#send(text, images)
         return new Response(null, { status: 202 })
       }
       case 'interrupt': {
@@ -215,10 +273,31 @@ class AgentSession {
 
   // --- hosting the query ------------------------------------------------------
 
-  async #send(text: string): Promise<void> {
+  /**
+   * The pictures go **ahead of the words** — a picture before the words about
+   * it reads better to the model — and all of them, in the order they were
+   * pasted.
+   *
+   * A prompt with no pictures travels as a bare string rather than as a
+   * one-block array, because that is what an ordinary Turn has always put on
+   * the wire and there is no reason for images to change it.
+   */
+  async #send(text: string, images: PromptImage[] = []): Promise<void> {
     const input = await this.#host()
     this.#turnOpen = true
-    input.push({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null })
+    const content: string | AgentPromptBlock[] =
+      images.length === 0
+        ? text
+        : [
+            ...images.map(
+              (image): AgentPromptBlock => ({
+                type: 'image',
+                source: { type: 'base64', media_type: image.mediaType, data: image.data },
+              }),
+            ),
+            { type: 'text', text },
+          ]
+    input.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null })
   }
 
   /** Starts the query if it is not already running, and returns its input. */
@@ -413,7 +492,15 @@ class AgentSession {
     // Turn that finished as asked, because a stop the person asked for is not a
     // problem they have. `terminalReason` survives, so a consumer that wants to
     // tell an interrupt from a natural ending still can.
-    const retained = frame.kind === 'failed' && this.#interrupting ? idleFrom(frame) : frame
+    const interrupted = frame.kind === 'failed' && this.#interrupting ? idleFrom(frame) : frame
+    // And an image gives up its payload here, on the way into the log.
+    //
+    // This is the boundary the handle rule is enforced at, and it is here
+    // rather than in `classify` because `classify` is lossless by contract: it
+    // emits what the SDK said, `data` and `url` included. The log is what a
+    // browser sees — it is the wire, the reconnect mechanism and the replay
+    // fixture at once — so it is the log that must never carry either.
+    const retained = interrupted.kind === 'image' ? this.#minted(interrupted) : interrupted
 
     if (retained.kind === 'session') this.#sessionId = retained.sessionId
     if (retained.kind === 'settled' || retained.kind === 'failed') {
@@ -423,6 +510,28 @@ class AgentSession {
 
     this.#log.push(retained)
     this.#emit(frameEvent(retained, this.#log.length - 1))
+  }
+
+  /**
+   * The same image, holding a handle instead of its payload.
+   *
+   * `data` and `url` are both dropped, and `url` unconditionally: an image the
+   * SDK gave only a location for cannot be minted against — the host has no
+   * bytes — and the two things it must not do are pass the location on so the
+   * browser fetches it, or fetch it itself. Such an image is still retained,
+   * because an image arrived, and a Transcript that dropped it would be quietly
+   * lying about what was said. It simply has no handle, and a viewer draws the
+   * marker without the picture.
+   */
+  #minted(frame: ImageFrame): ImageFrame {
+    const handle = this.#images.mint({ mediaType: frame.mediaType, data: frame.data })
+    return compact<ImageFrame>({
+      kind: 'image',
+      mediaType: frame.mediaType,
+      handle,
+      toolCallId: frame.toolCallId,
+      thread: frame.thread,
+    })
   }
 
   /** The Turn stopped without the runtime saying so. It is idle, not broken. */
@@ -525,6 +634,32 @@ function commandsIn(described: unknown): SlashCommandInfo[] {
     )
   }
   return commands
+}
+
+/**
+ * The pictures pasted in with a prompt. `undefined` means *refuse the Event* —
+ * distinct from an empty list, which means the person pasted nothing.
+ *
+ * Read strictly, unlike everything `classify` reads. The difference is who is
+ * talking: `classify` reads the SDK, which may grow a field or drop one, and a
+ * Turn must never fail for that. This reads the **client**, whose input is the
+ * one thing ADR-0001 says to treat as hostile — so a media type the host would
+ * not hold is a refusal here rather than something forwarded to the SDK and
+ * discovered later.
+ */
+function imagesIn(value: unknown): PromptImage[] | undefined {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) return undefined
+  const images: PromptImage[] = []
+  for (const entry of value) {
+    const image = record(entry)
+    const mediaType = image && str(image['mediaType'])
+    const data = image && str(image['data'])
+    if (mediaType === undefined || data === undefined || data === '') return undefined
+    if (!SERVABLE.has(mediaType)) return undefined
+    images.push({ mediaType, data })
+  }
+  return images
 }
 
 function strings(value: unknown): string[] | undefined {
