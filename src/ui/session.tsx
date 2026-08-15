@@ -26,6 +26,7 @@ import { ClaudeTodoList } from './claude-todo-list.tsx'
 import { ClaudeToolCall } from './claude-tool-call.tsx'
 import { useFollowing } from './following.ts'
 import { cn } from './lib/cn.ts'
+import { Markdown } from './markdown.tsx'
 import {
   arrange,
   hueOf,
@@ -589,7 +590,14 @@ function draw(message: Message, src: (handle: string) => string): React.ReactNod
     case 'prompt':
       return <ClaudeMessage role="user">{message.text}</ClaudeMessage>
     case 'text':
-      return <ClaudeMessage role="assistant">{message.text}</ClaudeMessage>
+      // The agent writes Markdown; the person writes what they typed. Only one
+      // of the two is drawn as markup, and it is not the one whose asterisks
+      // might have been meant.
+      return (
+        <ClaudeMessage role="assistant">
+          <Markdown text={message.text} />
+        </ClaudeMessage>
+      )
     case 'reasoning':
       // Only ever present when the hook was asked for it: thinking is not an
       // answer, so it is out of the Transcript by default.
