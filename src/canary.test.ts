@@ -87,7 +87,15 @@ test('nothing but asking for it arms the live canary', async () => {
   const scripts = ((await Bun.file(`${import.meta.dir}/../package.json`).json()) as {
     scripts: Record<string, string>
   }).scripts
-  expect(scripts['test']).toBe('bun test src')
+  // Named as a property rather than as a string, because the script grows a
+  // directory whenever one is added and the thing that must stay true is not
+  // its spelling: `bun test` with no target, or with `.` or `test` among them,
+  // would walk into `test/` and arm the canary from an ordinary run.
+  const targets = (scripts['test'] ?? '').replace(/^bun test/, '').trim().split(/\s+/)
+  expect(targets.filter((one) => one !== '')).not.toHaveLength(0)
+  expect(targets.filter((one) => one === '.' || one === 'test' || one.startsWith('test/'))).toEqual(
+    [],
+  )
   expect(scripts['canary']).toContain('LIVE_CANARY=1')
 })
 
