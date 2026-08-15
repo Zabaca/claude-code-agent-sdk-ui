@@ -2,8 +2,7 @@
 
 import * as React from 'react'
 
-import { forgetImage, imageMarker } from '../core/composer.ts'
-import type { PromptImage } from '../core/event.ts'
+import { draft, emptyDraft, imageMarker, type Pasted } from '../core/composer.ts'
 import type { SlashCommandInfo } from '../core/frame.ts'
 import { HOLDABLE } from '../core/image.ts'
 import type {
@@ -78,11 +77,12 @@ export function ClaudeSession({
   clock?: ThreadClock
   className?: string
 }) {
-  const [text, setText] = React.useState('')
-  /** Pictures pasted in and not yet sent, in the order they were pasted. */
-  const [pasted, setPasted] = React.useState<Pasted[]>([])
-  /** What the last paste offered that the host will not hold. */
-  const [refused, setRefused] = React.useState<string[]>([])
+  // The words, the pictures attached to them and what the last paste would not
+  // take, held as one value with one way in. They are mutually constrained —
+  // a marker in the words means a picture in the tray, and taking one back
+  // renumbers the other — so keeping them as three pieces of state meant every
+  // handler had to remember to move all three.
+  const [{ text, pasted, refused }, edit] = React.useReducer(draft, undefined, emptyDraft)
   /** Dismissed by esc, and only until the words change. */
   const [dismissed, setDismissed] = React.useState(false)
   const [highlighted, setHighlighted] = React.useState(0)
@@ -99,7 +99,7 @@ export function ClaudeSession({
   const active = offered.length === 0 ? 0 : Math.min(highlighted, offered.length - 1)
 
   const say = (words: string) => {
-    setText(words)
+    edit({ type: 'typed', text: words })
     setDismissed(false)
     setHighlighted(0)
   }
@@ -173,13 +173,7 @@ export function ClaudeSession({
 
       <Attachments
         pasted={pasted}
-        onRemove={(at) => {
-          setPasted(without(pasted, at))
-          // The words follow the pictures. A draft still saying [Image #2]
-          // beside a tray holding one picture is a sentence about something
-          // that is not being sent.
-          setText((words) => forgetImage(words, at))
-        }}
+        onRemove={(at) => edit({ type: 'removed', at })}
       />
 
       <Refused types={refused} />
@@ -202,27 +196,21 @@ export function ClaudeSession({
           // that never registered.
           event.preventDefault()
           const holdable = files.filter((file) => HOLDABLE.has(file.type))
-          setRefused(
-            files.filter((file) => !HOLDABLE.has(file.type)).map((file) => file.type || file.name),
-          )
+          edit({
+            type: 'refused',
+            types: files
+              .filter((file) => !HOLDABLE.has(file.type))
+              .map((file) => file.type || file.name),
+          })
           if (holdable.length === 0) return
           // Read now, not when the bytes are ready: `selectionStart` is where
           // the cursor is *this instant*, and the read below is a promise.
           const caret = caretIn(event.target) ?? text.length
-          // The markers number from what is already attached, so a second paste
-          // is [Image #2]. Counted from this render's `pasted` rather than from
-          // inside the updater below, because a state updater that reaches out
-          // of itself runs twice under StrictMode — and would then write the
-          // markers in twice.
-          const from = pasted.length
           void Promise.all(holdable.map(held)).then((read) => {
-            const pictures = read.filter(there)
-            // Markers only for the pictures that actually made it. A marker for
-            // a picture nobody is holding is a sentence pointing at nothing.
-            if (pictures.length === 0) return
-            const markers = pictures.map((_, at) => imageMarker(from + at)).join(' ')
-            setPasted((already) => [...already, ...pictures])
-            setText((words) => spliced(words, Math.min(caret, words.length), `${markers} `))
+            // The numbering is the reducer's, worked out from the draft it is
+            // given rather than from this render's copy of it — so two pastes
+            // landing before React has drawn either still number 1 and 2.
+            edit({ type: 'pasted', pictures: read.filter(there), caret })
           })
         }}
       >
@@ -263,12 +251,12 @@ export function ClaudeSession({
               value,
               pasted.map((one) => one.image),
             )
-            say('')
             // The pictures go with the words. Left behind they would be sent
             // again with the next Turn, which is the composer showing one
             // thing and the wire carrying another.
-            setPasted([])
-            setRefused([])
+            edit({ type: 'cleared' })
+            setDismissed(false)
+            setHighlighted(0)
           }}
           placeholder={placeholder}
           mode={session.mode}
@@ -291,8 +279,6 @@ export function ClaudeSession({
  * A picture pasted in and not yet sent: the payload that will travel, and the
  * name it is shown under so a person can tell two of them apart.
  */
-type Pasted = { name: string; image: PromptImage }
-
 /**
  * What the composer is about to send along with the words.
  *
@@ -385,16 +371,6 @@ function Refused({ types }: { types: string[] }) {
   )
 }
 
-/** The list without the one at `at`. */
-function without<T>(items: T[], at: number): T[] {
-  return items.filter((_, index) => index !== at)
-}
-
-/** `words` with `insert` put in at `at`. */
-function spliced(words: string, at: number, insert: string): string {
-  return `${words.slice(0, at)}${insert}${words.slice(at)}`
-}
-
 /**
  * Where the cursor is in the field a paste landed in, if it landed in one.
  *
@@ -410,11 +386,6 @@ function caretIn(target: EventTarget | null): number | undefined {
   return typeof at === 'number' ? at : undefined
 }
 
-/**
- * What the host will hold, restated here so a paste it would refuse never
- * leaves the browser. The handler enforces this again on the way in — this is
- * a courtesy to the person, not the check that matters.
- */
 /**
  * A pasted file as a payload the wire can carry: base64, and no `data:` prefix.
  * A data URI is a location with the bytes inlined, and the Event vocabulary

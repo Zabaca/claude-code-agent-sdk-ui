@@ -11,6 +11,8 @@
  * component, because they are how it looks rather than what it means.
  */
 
+import type { PromptImage } from './event.ts'
+
 /** The permission modes Claude Code cycles through with shift+tab. */
 export type ClaudeMode = 'auto' | 'manual' | 'accept-edits' | 'plan'
 
@@ -56,4 +58,95 @@ export function forgetImage(text: string, removed: number): string {
     if (at === gone) return ''
     return at > gone ? `[Image #${at - 1}]${space}` : whole
   })
+}
+
+/** A picture attached to the draft, and what to call it in the tray. */
+export type Pasted = {
+  name: string
+  image: PromptImage
+}
+
+/**
+ * What a composer is holding: the words, the pictures attached to them, and
+ * what the last paste would not take.
+ *
+ * The three move together and cannot be reasoned about apart. A picture
+ * attached without its marker written is a Turn carrying something the words
+ * cannot name; a marker written for a picture that was never attached points at
+ * nothing; and taking a picture back has to renumber the markers left behind or
+ * the words describe a picture that is no longer in the request. Held as one
+ * value with one way in, so none of those can be half-done.
+ */
+export type Draft = {
+  text: string
+  pasted: Pasted[]
+  /** Media types the last paste would not hold, for telling the person. */
+  refused: string[]
+}
+
+/** Everything that can happen to a draft. */
+export type DraftEvent =
+  /** The person typed, or a command was taken from the menu. */
+  | { type: 'typed'; text: string }
+  /**
+   * Pictures were pasted and have finished reading.
+   *
+   * `caret` is where the cursor was **when the paste happened**, not where it is
+   * now: reading a file is a promise and the cursor has moved by the time it
+   * resolves. Past the end of the words it clamps, so a marker never lands
+   * outside the sentence.
+   */
+  | { type: 'pasted'; pictures: Pasted[]; caret: number }
+  /** A paste carried types the composer will not hold. */
+  | { type: 'refused'; types: string[] }
+  /** A picture was taken back out of the tray. */
+  | { type: 'removed'; at: number }
+  /** The words were sent. The pictures go with them. */
+  | { type: 'cleared' }
+
+/**
+ * The draft after one thing has happened to it.
+ *
+ * Pure, and pure on purpose: the marker numbering is worked out from the state
+ * being reduced rather than from a render's copy of it, so two pastes landing
+ * before React has drawn either still number 1 and 2 — and a reducer React runs
+ * twice for one paste still numbers it once, with no counting done outside
+ * itself to be careful about.
+ */
+export function draft(state: Draft, event: DraftEvent): Draft {
+  switch (event.type) {
+    case 'typed':
+      return { ...state, text: event.text }
+    case 'pasted': {
+      // A marker for a picture nobody is holding is a sentence pointing at
+      // nothing, so a paste that read nothing changes neither the words nor
+      // the tray.
+      if (event.pictures.length === 0) return state
+      const markers = event.pictures
+        .map((_picture, at) => imageMarker(state.pasted.length + at))
+        .join(' ')
+      const at = Math.min(Math.max(event.caret, 0), state.text.length)
+      return {
+        ...state,
+        text: `${state.text.slice(0, at)}${markers} ${state.text.slice(at)}`,
+        pasted: [...state.pasted, ...event.pictures],
+      }
+    }
+    case 'refused':
+      return { ...state, refused: event.types }
+    case 'removed':
+      return {
+        ...state,
+        // The words follow the pictures.
+        text: forgetImage(state.text, event.at),
+        pasted: state.pasted.filter((_picture, index) => index !== event.at),
+      }
+    case 'cleared':
+      return { text: '', pasted: [], refused: [] }
+  }
+}
+
+/** A draft with nothing in it. */
+export function emptyDraft(): Draft {
+  return { text: '', pasted: [], refused: [] }
 }
