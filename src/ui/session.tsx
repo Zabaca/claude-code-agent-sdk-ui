@@ -14,6 +14,7 @@ import type {
 } from '../core/transcript.ts'
 import type { RecalledMemory } from '../core/frame.ts'
 import type { AgentSession } from '../react/session.ts'
+import { ClaudeDiff } from './claude-diff.tsx'
 import { ClaudeMessage } from './claude-message.tsx'
 import { ClaudePrompt } from './claude-prompt.tsx'
 import { ClaudeThinking } from './claude-thinking.tsx'
@@ -31,6 +32,7 @@ import {
   type ThreadDisplay,
   type ThreadReading,
 } from './thread.tsx'
+import { diffOf } from './tool-output.ts'
 
 /**
  * `ClaudeSession` — the thin container that wires a Session to the components.
@@ -683,6 +685,19 @@ function Undrawn({ kind }: { kind: Message['kind'] }) {
  * answered when it has not.
  */
 function ToolCall({ message }: { message: ToolCallMessage }) {
+  // A file edit says what it changed, so it is drawn as what it changed. The
+  // patch is the SDK's own — see `tool-output.ts`, which is also where the
+  // decision not to draw one lives. Where there is no patch to draw this falls
+  // through to the collapsed line below rather than inventing a diff.
+  const diff = diffOf(message)
+  if (diff) {
+    return (
+      <div data-diff={diff.file} data-status={message.status}>
+        <ClaudeDiff file={diff.file} summary={diff.summary} lines={diff.lines} />
+      </div>
+    )
+  }
+
   const output = message.output
   const arg = argOf(message.input)
   const whole = output !== undefined && output.includes('\n') ? output : undefined
