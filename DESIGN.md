@@ -156,6 +156,20 @@ loop — is how you end up unable to test either.
 - **Bun-first.** All three prior implementations are Bun. The handler is written
   against Web-standard `Request`/`Response` so it is not *hostile* to other
   runtimes, but Bun.serve and Hono are what get tested.
+- **Only the agent's own words get the whole screen.** Prose, a person's
+  prompt, thinking — those are the conversation, and they are drawn in full.
+  Everything else in a Transcript is somebody else's output about the
+  conversation: tool results, hook stdout and stderr, recalled memories. Those
+  are drawn collapsed, behind a real `<details>` disclosure, and never cut —
+  the whole of the text stays in the DOM, so what the screen holds back is a
+  click away and the Transcript still holds everything that was said. Two
+  limits, because output arrives shaped two ways: a line count (a hook that
+  printed 200 lines) and a character count (a JSON payload with its newlines
+  escaped, which is one physical line thousands of characters wide and which a
+  line count calls short). Output short enough to read draws no disclosure at
+  all. A hook's preview is its tail — a process says how it ended at the end —
+  while a tool's collapsed line keeps its head, which is where an answer says
+  what it is. `Spill` and `clip` in `src/ui/session.tsx`.
 - **Ship the build, not the sources.** Bun-first is how it is developed, not
   what it may demand of a consumer. `dist/` carries compiled JavaScript and
   declarations, emitted by `prepack`. Publishing `src/` was tried and works

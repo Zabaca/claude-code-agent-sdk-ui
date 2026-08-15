@@ -95,6 +95,42 @@ test('a long tool output is summarised to one line and expandable to the whole',
   view.unmount()
 })
 
+test('a tool that answers in one enormous line is still one readable line', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+  const blob = `{"rows":[${'"x",'.repeat(1000)}]}`
+
+  await act(async () => {
+    fake.frame({ kind: 'tool-call', id: 'toolu_q', name: 'Bash', input: { command: 'query' } })
+    fake.frame({ kind: 'tool-result', id: 'toolu_q', output: blob, isError: false })
+  })
+
+  // A wall does not stop being a wall for arriving without newlines. Counting
+  // lines calls this one line and prints all four thousand characters of it.
+  const summary = line('Bash').querySelector('summary')?.textContent ?? ''
+  expect(summary.length).toBeLessThan(400)
+  // Collapsed, not cut: the answer itself is still there to expand.
+  expect(line('Bash').textContent).toContain(blob)
+  view.unmount()
+})
+
+test('a tool called with an enormous argument keeps its line, and the argument', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+  const command = `echo ${'a'.repeat(4000)}`
+
+  await act(async () => {
+    fake.frame({ kind: 'tool-call', id: 'toolu_e', name: 'Bash', input: { command } })
+  })
+
+  const summary = line('Bash').querySelector('summary')?.textContent ?? ''
+  expect(summary.length).toBeLessThan(400)
+  // What it was called with still says what it was: the head of the argument,
+  // because a command says what it does at its start.
+  expect(summary).toContain('echo aaa')
+  view.unmount()
+})
+
 test('prose still being written is on screen before its Frame exists', async () => {
   const fake = fakeSse()
   const view = await mount(fake)
@@ -518,6 +554,184 @@ test('a hook that refused is not drawn like a hook that passed', async () => {
   expect(statusOf('hook', 0)).not.toBe('error')
   expect(colourAt('hook', 1)).toBe('var(--cc-error)')
   expect(colourAt('hook', 0)).not.toBe('var(--cc-error)')
+  view.unmount()
+})
+
+test('a hook that says a great deal is collapsed to its last lines, and keeps all of them', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+  const said = Array.from({ length: 200 }, (_, at) => `line ${at + 1}`)
+
+  await act(async () => {
+    fake.frame({
+      kind: 'hook',
+      id: 'hook-1',
+      name: 'SessionStart:startup',
+      hookEvent: 'SessionStart',
+      status: 'success',
+      output: said.join('\n'),
+    })
+  })
+
+  // The complaint this exists for: a hook's own words are the runtime's, not
+  // the agent's, and two hundred lines of them push the conversation off the
+  // screen before it has started.
+  const shown = preview('hook', 0)
+  expect(shown.length).toBeLessThanOrEqual(5)
+  // The tail, because that is where a hook says how it ended.
+  expect(shown.at(-1)).toBe('line 200')
+  expect(shown).not.toContain('line 1')
+  // Collapsed, not dropped: everything the hook said is still a click away.
+  // Truncation is what the screen does, never what the Transcript holds.
+  expect(whole('hook', 0)).toContain('line 1\n')
+  expect(whole('hook', 0)).toContain('line 200')
+  // And it says how much it is holding back, so the click is discoverable
+  // rather than something a reader has to guess is there.
+  expect(marker('hook', 0).textContent).toContain('195')
+  view.unmount()
+})
+
+test('a hook that says one enormous line is collapsed too', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+  // What the screenshot actually showed: a JSON payload whose newlines are
+  // escaped, so it is one physical line thousands of characters wide.
+  // Counting lines alone calls this short and prints the whole wall.
+  const blob = `{"additionalContext":"${'x'.repeat(4000)}"} exit 0`
+
+  await act(async () => {
+    fake.frame({
+      kind: 'hook',
+      id: 'hook-1',
+      name: 'SessionStart:startup',
+      hookEvent: 'SessionStart',
+      status: 'success',
+      output: blob,
+    })
+  })
+
+  const shown = preview('hook', 0).join('\n')
+  expect(shown.length).toBeLessThan(400)
+  expect(shown).toContain('exit 0')
+  expect(whole('hook', 0)).toContain(blob)
+  view.unmount()
+})
+
+test('a hook short enough to read is left alone', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({
+      kind: 'hook',
+      id: 'hook-1',
+      name: 'format-on-edit',
+      hookEvent: 'PostToolUse',
+      status: 'success',
+      output: 'formatted 2 files',
+    })
+  })
+
+  // A disclosure around two words is a click that buys nothing and hides
+  // something: collapsing is for walls, not for everything that is not prose.
+  expect(marker('hook', 0).querySelector('[data-spill]')).toBeNull()
+  expect(marker('hook', 0).textContent).toContain('formatted 2 files')
+  view.unmount()
+})
+
+test('a hook that refused shows why without being expanded', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+  const checks = Array.from({ length: 40 }, (_, at) => `checked ${at}`).join('\n')
+
+  await act(async () => {
+    fake.frame({
+      kind: 'hook',
+      id: 'hook-1',
+      name: 'block-secrets',
+      hookEvent: 'PreToolUse',
+      status: 'error',
+      stderr: `${checks}\nrefused: .env is not readable`,
+      exitCode: 2,
+    })
+  })
+
+  // A refusal rewrote what the agent was allowed to do, and the hook's own
+  // words are the only account of why. Behind a click with nothing visible,
+  // the Transcript shows a tool call that simply did not happen.
+  expect(preview('hook', 0)).toContain('refused: .env is not readable')
+  view.unmount()
+})
+
+test('a hook that also printed chatter still ends on why it refused', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+  const chatter = Array.from({ length: 40 }, (_, at) => `scanning ${at}`).join('\n')
+
+  await act(async () => {
+    fake.frame({
+      kind: 'hook',
+      id: 'hook-1',
+      name: 'block-secrets',
+      hookEvent: 'PreToolUse',
+      status: 'error',
+      stdout: chatter,
+      stderr: 'refused: .env is not readable',
+      exitCode: 2,
+    })
+  })
+
+  // The preview is the tail, so which channel is written last decides what
+  // survives it. Chatter on stdout must not push the refusal off the screen.
+  expect(preview('hook', 0)).toContain('refused: .env is not readable')
+  view.unmount()
+})
+
+test('an expanded wall says how to put it back', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+  const said = Array.from({ length: 200 }, (_, at) => `line ${at + 1}`).join('\n')
+
+  await act(async () => {
+    fake.frame({
+      kind: 'hook',
+      id: 'hook-1',
+      name: 'SessionStart:startup',
+      hookEvent: 'SessionStart',
+      status: 'success',
+      output: said,
+    })
+  })
+
+  // A summary whose every part hides when open collapses to nothing, and a
+  // reader who expanded two hundred lines with the mouse has no way back to
+  // them with it. Something in the summary has to survive opening.
+  const summary = marker('hook', 0).querySelector('[data-spill] summary')
+  const standing = [...(summary?.children ?? [])].filter(
+    (part) => !part.className.includes('group-open:hidden'),
+  )
+  expect(standing.length).toBeGreaterThan(0)
+  expect(standing.map((part) => part.textContent).join(' ')).toContain('collapse')
+  view.unmount()
+})
+
+test('a recall that carries a long memory is collapsed the same way', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+  const remembered = Array.from({ length: 60 }, (_, at) => `remembered ${at + 1}`).join('\n')
+
+  await act(async () => {
+    fake.frame({
+      kind: 'recall',
+      mode: 'select',
+      memories: [{ path: '/memories/ports.md', scope: 'personal', content: remembered }],
+    })
+  })
+
+  // Whose memory it is stays on the marker line — provenance is the claim.
+  expect(marker('recall', 0).textContent).toContain('/memories/ports.md')
+  expect(preview('recall', 0).length).toBeLessThanOrEqual(5)
+  expect(whole('recall', 0)).toContain('remembered 1\n')
   view.unmount()
 })
 
@@ -1581,6 +1795,23 @@ function marker(kind: string, at: number): HTMLElement {
   const found = document.querySelectorAll<HTMLElement>(`[data-divergence="${kind}"]`)[at]
   if (!found) throw new Error(`no ${kind} marker at ${at}`)
   return found
+}
+
+/**
+ * What a marker's own long output shows before anyone expands it — the lines a
+ * reader is made to scroll past, which is the whole complaint.
+ */
+function preview(kind: string, at: number): string[] {
+  const shown = marker(kind, at).querySelector('[data-preview]')
+  if (!shown) throw new Error(`no preview on the ${kind} marker at ${at}`)
+  return (shown.textContent ?? '').split('\n')
+}
+
+/** Everything that output said, expanded — what collapsing must not lose. */
+function whole(kind: string, at: number): string {
+  const held = marker(kind, at).querySelector('[data-whole]')
+  if (!held) throw new Error(`no expanded output on the ${kind} marker at ${at}`)
+  return held.textContent ?? ''
 }
 
 function statusOf(kind: string, at: number): string | undefined {

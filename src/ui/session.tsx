@@ -763,6 +763,7 @@ function Marker({
   details = [],
   tone = 'var(--cc-fg-muted)',
   status,
+  children,
 }: {
   /**
    * Drawn from the Message vocabulary through `Extract`, so a kind renamed
@@ -777,22 +778,109 @@ function Marker({
   tone?: string
   /** Where a marker has states of its own, as a hook does. */
   status?: string
+  /**
+   * Whatever the marker carries that is too long for its line, drawn below it.
+   * `details` is joined into one flowed sentence, so anything with lines of
+   * its own cannot go there and stay readable.
+   */
+  children?: React.ReactNode
 }) {
   const said = details.filter((part): part is string => part !== undefined && part !== '')
   return (
     <div
       data-divergence={kind}
       {...(status !== undefined ? { 'data-status': status } : {})}
-      className="cc:flex cc:min-w-0 cc:flex-wrap cc:items-baseline cc:gap-2"
+      className="cc:flex cc:min-w-0 cc:flex-col cc:gap-1"
       style={{ color: tone }}
     >
-      <span aria-hidden>{glyph}</span>
-      <span className="cc:min-w-0">
-        {label}
-        {said.length === 0 ? null : ` — ${said.join(' · ')}`}
-      </span>
+      <div className="cc:flex cc:min-w-0 cc:flex-wrap cc:items-baseline cc:gap-2">
+        <span aria-hidden>{glyph}</span>
+        <span className="cc:min-w-0">
+          {label}
+          {said.length === 0 ? null : ` — ${said.join(' · ')}`}
+        </span>
+      </div>
+      {children}
     </div>
   )
+}
+
+/**
+ * How much of somebody else's output stands in the Transcript uncollapsed.
+ *
+ * Two limits rather than one, because output arrives shaped two ways. A hook
+ * that printed 200 lines is caught by the line count; a hook that printed one
+ * JSON payload with its newlines escaped is a single physical line thousands
+ * of characters wide, and a line count calls that short and prints the wall.
+ */
+const PREVIEW_LINES = 5
+const PREVIEW_CHARS = 300
+
+/**
+ * Somebody else's output, collapsed to its end.
+ *
+ * The Transcript is the agent's conversation; a runtime's own stdout is
+ * evidence about it, and evidence that takes a screen to scroll past has
+ * displaced the thing it was evidence for. So it is drawn tail-first: a
+ * process says how it ended at its end — the refusal, the error, the exit
+ * status — and that is the part worth the room.
+ *
+ * Collapsed, never cut. The whole of it stays behind a real `<details>`
+ * disclosure, so what the screen holds back is one click away and what the
+ * Transcript holds is still everything that was said. Text the screen dropped
+ * would be the screen quietly disagreeing with the log.
+ *
+ * Output short enough to read draws no disclosure at all: a click that hides
+ * two words buys nothing and costs a reader the words.
+ */
+function Spill({ text }: { text: string }) {
+  const lines = text.split('\n')
+  const tail = lines.slice(-PREVIEW_LINES)
+  const held = lines.length - tail.length
+  const ending = tail.join('\n')
+  const clipped = ending.length > PREVIEW_CHARS
+  if (held === 0 && !clipped) {
+    return <div className="cc:min-w-0 cc:whitespace-pre-wrap cc:break-words">{text}</div>
+  }
+  return (
+    <details
+      data-spill=""
+      className="cc:group cc:min-w-0 cc:[&_summary::-webkit-details-marker]:hidden"
+    >
+      <summary className="cc:cursor-pointer cc:list-none cc:rounded-none cc:outline-none cc:focus-visible:ring-1 cc:focus-visible:ring-[var(--cc-focus-ring)]">
+        <span
+          data-preview=""
+          className="cc:block cc:min-w-0 cc:break-words cc:whitespace-pre-wrap cc:group-open:hidden"
+        >
+          {clipped ? `…${ending.slice(-PREVIEW_CHARS)}` : ending}
+        </span>
+        {/* The hint flips rather than hides: a summary whose every part is
+            hidden when open is a disclosure with no way back for a mouse —
+            the click that expanded two hundred lines lands on nothing. */}
+        <span className="cc:block cc:group-open:hidden" style={{ color: 'var(--cc-fg-dim)' }}>
+          {rest(held, clipped ? ending.length - PREVIEW_CHARS : 0)}
+        </span>
+        <span className="cc:hidden cc:group-open:block" style={{ color: 'var(--cc-fg-dim)' }}>
+          (click to collapse)
+        </span>
+      </summary>
+      <div data-whole="" className="cc:min-w-0 cc:break-words cc:whitespace-pre-wrap">
+        {text}
+      </div>
+    </details>
+  )
+}
+
+/**
+ * What the disclosure is holding back, in whichever unit was the reason for
+ * holding it — lines where lines were the wall, characters where one unbroken
+ * line was.
+ */
+function rest(lines: number, chars: number): string {
+  const earlier = lines > 0 ? `${tokens(lines)} earlier lines` : undefined
+  const wider = chars > 0 ? `${tokens(chars)} earlier characters` : undefined
+  const both = [earlier, wider].filter((part): part is string => part !== undefined)
+  return `+${both.join(' · +')} (click to expand)`
 }
 
 /**
@@ -856,11 +944,22 @@ function Recall({ message }: { message: RecallMessage }) {
           : `${found.length} memories recalled — context from outside this conversation`
       }
       // Where each came from, because provenance is the whole claim: this text
-      // is in the agent's context and no one here put it there.
-      details={[message.mode, ...found.map(from)]}
+      // is in the agent's context and no one here put it there. The paths are
+      // the line; what the memories say is below it, collapsed, because a
+      // recalled file is as long as a file.
+      details={[message.mode, ...found.map(where)]}
       tone="var(--cc-info)"
-    />
+    >
+      {found.some((memory) => memory.content !== undefined) ? (
+        <Spill text={found.map(from).join('\n')} />
+      ) : null}
+    </Marker>
   )
+}
+
+/** Which memory, without what it says — the marker line's half. */
+function where(memory: RecalledMemory): string {
+  return memory.scope === undefined ? memory.path : `${memory.path} (${memory.scope})`
 }
 
 /**
@@ -889,6 +988,15 @@ function from(memory: RecalledMemory): string {
  */
 function Hook({ message }: { message: HookMessage }) {
   const failed = message.status === 'error'
+  // What the hook was and how it went stays on the line: a phrase each, and
+  // what a reader scans for. What it printed goes below it, collapsed — that
+  // is the part which arrives by the screenful.
+  // stderr last, because the preview is the tail: a hook that logged a screen
+  // of progress to stdout and its refusal to stderr would otherwise have the
+  // refusal pushed off the only part a reader sees.
+  const said = [message.output, message.stdout, message.stderr]
+    .filter((part): part is string => part !== undefined && part !== '')
+    .join('\n')
   return (
     <Marker
       kind="hook"
@@ -898,13 +1006,12 @@ function Hook({ message }: { message: HookMessage }) {
       details={[
         message.status,
         message.hookEvent,
-        message.output,
-        message.stderr,
-        message.stdout,
         message.exitCode === undefined ? undefined : `exit ${message.exitCode}`,
       ]}
       tone={failed ? 'var(--cc-error)' : 'var(--cc-fg-muted)'}
-    />
+    >
+      {said === '' ? null : <Spill text={said} />}
+    </Marker>
   )
 }
 
@@ -1061,7 +1168,13 @@ function ToolCall({ message }: { message: ToolCallMessage }) {
 
   const output = message.output
   const arg = argOf(message.input)
-  const whole = output !== undefined && output.includes('\n') ? output : undefined
+  // Expandable whenever the line does not hold all of it — by lines, or by one
+  // line too wide to stand there. Without this a clipped answer would be the
+  // one thing collapsing must never be: text the screen dropped.
+  const whole =
+    output !== undefined && (output.includes('\n') || output.length > PREVIEW_CHARS)
+      ? output
+      : undefined
   return (
     <ClaudeToolCall
       tool={message.name}
@@ -1085,10 +1198,10 @@ const ARG_KEYS = ['file_path', 'path', 'command', 'pattern', 'url', 'description
 function argOf(input: Record<string, unknown>): string | undefined {
   for (const key of ARG_KEYS) {
     const value = input[key]
-    if (typeof value === 'string' && value !== '') return value
+    if (typeof value === 'string' && value !== '') return clip(value)
   }
   for (const value of Object.values(input)) {
-    if (typeof value === 'string' && value !== '') return value
+    if (typeof value === 'string' && value !== '') return clip(value)
   }
   return undefined
 }
@@ -1096,8 +1209,20 @@ function argOf(input: Record<string, unknown>): string | undefined {
 /** The collapsed line: the first line, and how much more is behind it. */
 function summarise(output: string): string {
   const lines = output.split('\n')
-  const first = lines[0] ?? ''
+  const first = clip(lines[0] ?? '')
   if (lines.length === 1) return first
   return `${first} +${lines.length - 1} lines`
+}
+
+/**
+ * A line held to a line's width.
+ *
+ * Head-first, unlike `Spill`: this stands where the collapsed line already
+ * reads "what was run, and what came back", and an answer says what it is at
+ * its start. A tool that replies with one unbroken JSON object is a wall the
+ * line count never sees, which is the only reason this exists.
+ */
+function clip(text: string): string {
+  return text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS)}…` : text
 }
 
