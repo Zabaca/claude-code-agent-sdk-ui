@@ -64,8 +64,11 @@ test('the components changed during v0.1 say what changed in them', async () => 
   const prompt = await Bun.file(`${dir}/claude-prompt.tsx`).text()
   // The callbacks that turned a drawing into a composer.
   expect(prompt.slice(0, 2500)).toContain('onSubmit')
-  // The button chrome: real buttons in a stylesheet that ships no Preflight.
-  expect(prompt.slice(0, 2500)).toMatch(/neutralise the user agent's button|button\s*\n\s*\*\s*chrome/)
+  // The control chrome: real form controls in a stylesheet that ships no
+  // Preflight, each neutralising the user agent on itself.
+  expect(prompt.slice(0, 2500)).toMatch(/neutralise the user agent's (button|control)|user\s*\n\s*\*\s*agent's (button|control)/)
+  // The field is a textarea, so shift+Enter opens a line — not an input.
+  expect(prompt.slice(0, 2500)).toContain('textarea')
 
   const thinking = await Bun.file(`${dir}/claude-thinking.tsx`).text()
   // Tokens are drawn from a prop rather than upstream's invented `secs * 137`.

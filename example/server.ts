@@ -15,13 +15,32 @@ import index from './index.html'
 const root = new URL('../', import.meta.url).pathname
 const stylesheet = `${root}dist/styles.css`
 
+/** Newest mtime among the files `build:css` reads, or 0 if none are there. */
+async function sources(): Promise<number> {
+  let newest = 0
+  for await (const file of new Bun.Glob('src/ui/**/*.{tsx,css}').scan(root)) {
+    if (file.endsWith('.test.tsx')) continue
+    newest = Math.max(newest, Bun.file(`${root}${file}`).lastModified)
+  }
+  return newest
+}
+
 // The stylesheet is a build artefact and is not committed. Building it here
 // means `bun run dev` works from a fresh clone with no second command.
-if (!(await Bun.file(stylesheet).exists())) {
+//
+// Rebuilt whenever a component is newer than it, because `--hot` reloads the
+// modules and not the stylesheet: editing a class name and reloading would
+// otherwise serve yesterday's CSS, and the component would render with a
+// utility that exists in the source and in no rule — which reads as the
+// change not having worked rather than as a stale build.
+const built = await Bun.file(stylesheet).exists()
+  ? Bun.file(stylesheet).lastModified
+  : 0
+if (built < (await sources())) {
   console.log('building the stylesheet…')
-  const built = Bun.spawnSync(['bun', 'run', 'build:css'], { cwd: root })
-  if (built.exitCode !== 0) {
-    throw new Error(`build:css failed: ${built.stderr?.toString() ?? ''}`)
+  const build = Bun.spawnSync(['bun', 'run', 'build:css'], { cwd: root })
+  if (build.exitCode !== 0) {
+    throw new Error(`build:css failed: ${build.stderr?.toString() ?? ''}`)
   }
 }
 

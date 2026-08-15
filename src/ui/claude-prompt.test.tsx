@@ -40,6 +40,31 @@ describe("ClaudePrompt", () => {
     expect(submitted).toEqual([]);
   });
 
+  test("leaves shift+Enter to the browser, so it opens a second line", () => {
+    // Not sending is only half of it. The newline is the user agent's default
+    // action on a multi-line field, so two things have to hold: the field is a
+    // textarea — an input cannot hold a second line at all — and shift+Enter
+    // reaches the default. `fireEvent` returns false when something called
+    // `preventDefault`, which is what swallowing the newline would look like.
+    render(<ClaudePrompt value="line one" onChange={() => {}} onSubmit={() => {}} />);
+    const field = screen.getByLabelText("Prompt");
+
+    expect(field.tagName).toBe("TEXTAREA");
+    expect(fireEvent.keyDown(field, { key: "Enter", shiftKey: true })).toBe(true);
+    expect(fireEvent.keyDown(field, { key: "Enter" })).toBe(false);
+  });
+
+  test("sends every line of a multi-line prompt", () => {
+    const submitted: string[] = [];
+    render(
+      <ClaudePrompt value={"one\ntwo"} onChange={() => {}} onSubmit={(v) => submitted.push(v)} />,
+    );
+
+    fireEvent.keyDown(screen.getByLabelText("Prompt"), { key: "Enter" });
+
+    expect(submitted).toEqual(["one\ntwo"]);
+  });
+
   test("reports submit for an uncontrolled composer", () => {
     const submitted: string[] = [];
     render(<ClaudePrompt defaultValue="from the input" onSubmit={(v) => submitted.push(v)} />);
@@ -120,6 +145,28 @@ describe("ClaudePrompt", () => {
       }
     }
     view.unmount();
+  });
+
+  test("draws the field as bare text, not as the browser's textarea chrome", () => {
+    // Same collision as above, and the one that shipped visibly wrong: with no
+    // Preflight in the stylesheet, an unneutralised field paints the user
+    // agent's own inset border and background — a box drawn inside the
+    // composer's two rules, with a resize grip on the corner. Drop any of these
+    // and the box comes back.
+    render(<ClaudePrompt />);
+    const drawn = screen.getByLabelText("Prompt").className.split(/\s+/);
+
+    for (const neutralised of [
+      "cc:appearance-none",
+      "cc:border-0",
+      "cc:m-0",
+      "cc:[font:inherit]",
+      "cc:text-inherit",
+      "cc:bg-transparent",
+      "cc:resize-none",
+    ]) {
+      expect(drawn).toContain(neutralised);
+    }
   });
 
   test("stays inert chrome when no callbacks are given", () => {

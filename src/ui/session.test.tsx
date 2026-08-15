@@ -1363,8 +1363,8 @@ function press(key: string): Promise<void> {
   })
 }
 
-function composer(): HTMLInputElement {
-  return screen.getByLabelText('Prompt') as HTMLInputElement
+function composer(): HTMLTextAreaElement {
+  return screen.getByLabelText('Prompt') as HTMLTextAreaElement
 }
 
 function type(text: string): Promise<void> {

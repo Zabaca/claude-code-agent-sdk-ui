@@ -485,8 +485,8 @@ function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
-function composer(): HTMLInputElement {
-  return screen.getByLabelText('Prompt') as HTMLInputElement
+function composer(): HTMLTextAreaElement {
+  return screen.getByLabelText('Prompt') as HTMLTextAreaElement
 }
 
 /** The status each of a tool's lines is drawn with, in Transcript order. */
