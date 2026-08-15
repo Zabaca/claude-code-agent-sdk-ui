@@ -452,6 +452,30 @@ test("a Thread's live text is its own, not the agent's", async () => {
   ])
 })
 
+test('a Frame that settles no block moves none of them', async () => {
+  // Two blocks open at once, and something retained that is nothing to do with
+  // either — a hook firing, a meter reading, a tool call. The block that opened
+  // second used to be pushed along behind it, because where a block sits was
+  // counted partly in Frames and partly in blocks, and only the Frame half grew.
+  const fake = fakeSse()
+  const session = await mount(fake)
+
+  await act(async () => {
+    fake.partial({ block: 0, kind: 'text', text: 'Main says' })
+    fake.partial({ block: 0, kind: 'text', text: 'Sub says', thread: 'call-1' })
+  })
+
+  const before = session.current.transcript.messages
+
+  await act(async () =>
+    fake.frame({ kind: 'hook', name: 'block-secrets', status: 'success' }),
+  )
+
+  // The hook lands after both, and neither block has moved.
+  expect(session.current.transcript.messages.slice(0, 2)).toEqual(before)
+  expect(session.current.transcript.messages.at(-1)).toMatchObject({ kind: 'hook' })
+})
+
 test('a live block keeps its place while the log grows around it', async () => {
   // `golden.test.ts`'s "never moves a Message it has already placed", held
   // against the Transcript the hook hands out rather than the one `reduce`

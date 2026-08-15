@@ -275,9 +275,10 @@ type Live = {
   text: string
   thread?: string
   /**
-   * How many Messages stood ahead of the block when it opened — where it
-   * belongs in the order. Stamped once, when the block is first seen, so a
-   * block keeps the place it started at however much arrives around it.
+   * How many Frames had been retained when the block opened — where it belongs
+   * in the order. Stamped once and moved only when a block ahead of it settles
+   * into a Frame, so a block keeps the place it started at however much
+   * arrives around it.
    */
   after: number
 }
@@ -312,7 +313,12 @@ function step(state: SessionState, arrival: Arrival): SessionState {
       frames[arrival.index] = frame
       if (known) return { ...state, frames }
 
-      return { ...state, frames, live: retire(state.live, frame), sent: settle(state.sent, frame) }
+      return {
+        ...state,
+        frames,
+        live: retire(state.live, frame, arrival.index),
+        sent: settle(state.sent, frame),
+      }
     }
     case 'partial': {
       const partial = parse<PartialText>(arrival.body)
@@ -329,14 +335,11 @@ function step(state: SessionState, arrival: Arrival): SessionState {
         // Kept from when the block opened, never restamped: a delta arriving
         // after a Thread's Frame landed must not move the block it grows.
         //
-        // Blocks already open count as well as Frames already retained. A
-        // block that opened second is behind the first block's eventual Frame,
-        // not ahead of it — counting only the log would put the two in the
-        // order they *finished*, which is the thing being fixed. Counted over
-        // what is present rather than over the array's length, because a Frame
-        // arriving out of order leaves a hole and `reduce` walks the log
-        // without one.
-        after: state.live[held]?.after ?? present(state.frames).length + state.live.length,
+        // Counted over what is present rather than over the array's length,
+        // because a Frame arriving out of order leaves a hole and `reduce`
+        // walks the log without one. Blocks opened at the same count keep
+        // their relative order, which is the order they are held in.
+        after: state.live[held]?.after ?? present(state.frames).length,
       })
       if (held === -1) return { ...state, live: [...state.live, block] }
       const live = state.live.slice()
@@ -375,13 +378,21 @@ function step(state: SessionState, arrival: Arrival): SessionState {
  * Frame for a block the runtime never completed, so a reload would not show it
  * either; what is on screen follows the log rather than outliving it.
  */
-function retire(live: Live[], frame: Frame): Live[] {
+function retire(live: Live[], frame: Frame, index: number): Live[] {
   if (live.length === 0) return live
   if (frame.kind === 'settled' || frame.kind === 'failed') return []
   if (frame.kind !== 'text' && frame.kind !== 'reasoning') return live
   const at = live.findIndex((one) => one.kind === frame.kind && one.thread === frame.thread)
   if (at === -1) return live
-  return [...live.slice(0, at), ...live.slice(at + 1)]
+  // The Frame takes the settled block's place, and that place was ahead of
+  // every block opened after it — so those move past the Frame rather than
+  // staying where a block that is no longer live used to be. Only blocks
+  // behind the settled one move, and only far enough to clear it: a Frame that
+  // settles nothing, which is most of them, moves nothing at all.
+  return [
+    ...live.slice(0, at),
+    ...live.slice(at + 1).map((one) => ({ ...one, after: Math.max(one.after, index + 1) })),
+  ]
 }
 
 /**
