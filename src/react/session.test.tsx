@@ -797,6 +797,43 @@ const endpoint = 'http://localhost/agent'
 type Mounted = { readonly current: AgentSession; unmount(): void }
 
 /** Renders the hook against the fake transport and lets the first replay land. */
+test('the default transport calls the browser\'s own fetch, not a detached copy', async () => {
+  // Every other test here injects a `fetch`, so the default had never been
+  // called — and the browser\'s `fetch` is a native method that refuses to run
+  // unless it is called on the window. Held in a ref and called as
+  // `post.current(...)`, its `this` is the ref, and Chrome answers
+  // "Failed to execute \'fetch\' on \'Window\': Illegal invocation".
+  //
+  // Reachable only in live mode: replay supplies its own `fetch`, so the
+  // playground exercised everything except the path a real Session takes.
+  const original = globalThis.fetch
+  const called: string[] = []
+  const strict = function (this: unknown, url: unknown): Promise<Response> {
+    // What the browser does, which no test double had modelled.
+    if (this !== globalThis && this !== undefined) {
+      throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation")
+    }
+    called.push(String(url))
+    return Promise.resolve(new Response(null, { status: 202 }))
+  }
+  globalThis.fetch = strict as typeof globalThis.fetch
+
+  try {
+    const fake = fakeSse()
+    const session = await mount(fake)
+
+    await act(async () => session.current.send('hello'))
+
+    expect(called).toEqual([endpoint])
+    expect(session.current.error).toBeUndefined()
+    // And the words are still on screen rather than taken back as refused.
+    expect(session.current.transcript.messages).toEqual([{ kind: 'prompt', text: 'hello' }])
+    session.unmount()
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
 async function mount(fake: FakeSse, options: Partial<AgentSessionOptions> = {}): Promise<Mounted> {
   const view = renderHook(() =>
     useAgentSession({ endpoint, createEventSource: fake.createEventSource, ...options }),

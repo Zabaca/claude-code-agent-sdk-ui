@@ -30,7 +30,7 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   const reasoning = options.reasoning === true
 
   const create = useLatest(options.createEventSource ?? browserEventSource)
-  const post = useLatest(options.fetch ?? globalThis.fetch)
+  const post = useLatest(options.fetch ?? browserFetch)
 
   useEffect(() => {
     const source = create.current(endpoint)
@@ -180,6 +180,20 @@ export type AgentSessionOptions = {
 }
 
 /** As much of `fetch` as the hook uses. The browser's own satisfies it. */
+/**
+ * The browser's own `fetch`, called on the window.
+ *
+ * Not `globalThis.fetch` itself: it is a native method, it is held in a ref and
+ * called as `post.current(...)`, and that makes its `this` the ref rather than
+ * the window — which Chrome refuses with "Failed to execute 'fetch' on
+ * 'Window': Illegal invocation". Wrapped rather than bound so there is one
+ * reference for the life of the module and nothing to rebind per render.
+ *
+ * Only live mode ever reaches it. Replay supplies its own `fetch`, and so does
+ * every test, which is how this survived to be found in a browser.
+ */
+const browserFetch: AgentFetch = (endpoint, init) => globalThis.fetch(endpoint, init)
+
 export type AgentFetch = (
   endpoint: string,
   init: { method: string; headers: Record<string, string>; body: string },
