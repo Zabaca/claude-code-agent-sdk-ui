@@ -107,32 +107,10 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     })
   }, [will])
 
-  // One producer. Everything on screen — retained, still being written, or not
-  // yet acknowledged — is placed by the module whose job placing is, so the
-  // Transcript the hook hands out has the same index-stability the golden test
-  // holds `reduce` to. Assembling the tail here instead is what used to move
-  // the agent's words out from under their own React key whenever a Thread
-  // streamed beside them.
-  const transcript = useMemo((): Transcript => {
-    // Both kinds of unretained thing, in the order they happened. A person
-    // typing while the agent writes and an agent answering something just sent
-    // are the same situation from opposite ends: the only thing that orders
-    // them is which came first, which is what the mark on each records.
-    const pending: (Pending & { seq: number })[] = [
-      ...state.live.map((block) => ({
-        ...compact<Pending>({ kind: block.kind, text: block.text, thread: block.thread, after: block.after }),
-        seq: block.opened,
-      })),
-      ...state.sent.map((one) => ({
-        kind: 'prompt' as const,
-        text: one.text,
-        after: one.after,
-        seq: one.at,
-      })),
-    ].sort((a, b) => a.seq - b.seq)
-
-    return reduce(present(state.frames), { reasoning, pending })
-  }, [state.frames, state.live, state.sent, reasoning])
+  const transcript = useMemo(
+    (): Transcript => transcriptOf(state, reasoning),
+    [state.frames, state.live, state.sent, reasoning],
+  )
 
   const mode = useMemo(
     () => modeOf(transcript.harness?.permissionMode) ?? options.mode ?? 'auto',
@@ -279,7 +257,42 @@ export type AgentEventSourceFactory = (endpoint: string) => AgentEventSource
 
 // --- what has arrived -----------------------------------------------------------
 
-type SessionState = {
+/**
+ * The hook's own reducer and the view over it, reachable without React so the
+ * invariant joining them can be asserted directly. Not exported from the
+ * package's `react` entry point: this is a seam for the property test that
+ * holds `step` and `reduce` to agreeing, the way `image.ts` and `wire.ts` are
+ * reachable inside the package and are not part of `core`'s surface.
+ *
+ * One producer. Everything on screen — retained, still being written, or not
+ * yet acknowledged — is placed by the module whose job placing is, so the
+ * Transcript the hook hands out has the same index-stability the golden test
+ * holds `reduce` to. Assembling the tail in the component instead is what used
+ * to move the agent's words out from under their own React key whenever a
+ * Thread streamed beside them.
+ */
+export function transcriptOf(state: SessionState, reasoning: boolean): Transcript {
+  // Both kinds of unretained thing, in the order they happened. A person typing
+  // while the agent writes and an agent answering something just sent are the
+  // same situation from opposite ends: the only thing that orders them is which
+  // came first, which is what the mark on each records.
+  const pending: (Pending & { seq: number })[] = [
+    ...state.live.map((block) => ({
+      ...compact<Pending>({ kind: block.kind, text: block.text, thread: block.thread, after: block.after }),
+      seq: block.opened,
+    })),
+    ...state.sent.map((one) => ({
+      kind: 'prompt' as const,
+      text: one.text,
+      after: one.after,
+      seq: one.at,
+    })),
+  ].sort((a, b) => a.seq - b.seq)
+
+  return reduce(present(state.frames), { reasoning, pending })
+}
+
+export type SessionState = {
   /**
    * Index-addressed, because a Frame's `id:` is its index in the handler's log.
    * Placing rather than pushing is what makes a redelivered Frame idempotent.
@@ -317,18 +330,18 @@ type Live = {
 /** A person's words, shown before the handler has retained them. */
 type Sent = { at: number; text: string; after: number }
 
-type Arrival =
+export type Arrival =
   | { type: 'frame'; index: number; body: string }
   | { type: 'partial'; body: string }
   | { type: 'sent'; at: number; text: string }
   | { type: 'unsent'; at: number; why: string }
   | { type: 'broke'; why: string }
 
-function initial(): SessionState {
+export function initial(): SessionState {
   return { frames: [], live: [], sent: [] }
 }
 
-function step(state: SessionState, arrival: Arrival): SessionState {
+export function step(state: SessionState, arrival: Arrival): SessionState {
   switch (arrival.type) {
     case 'frame': {
       const frame = parse<Frame>(arrival.body)
@@ -466,9 +479,17 @@ function modeOf(permissionMode: string | undefined): ClaudeMode | undefined {
   }
 }
 
-/** Tells one optimistic Message from another, including two of the same words. */
+/**
+ * Tells one optimistic Message from another, including two of the same words.
+ *
+ * The one clock both kinds of unretained thing are stamped against — a person's
+ * words when they are willed, a block when it opens — which is the only thing
+ * that orders them against each other. Reachable inside the package for the
+ * same reason `step` is: a test that stamped its own would be ordering against
+ * a clock the reducer never reads.
+ */
 let marks = 0
-function mark(): number {
+export function mark(): number {
   marks += 1
   return marks
 }
