@@ -32,8 +32,23 @@ export type Transcript = {
   harness?: Harness
   /** The slash commands the runtime advertises, as last advertised. */
   commands: SlashCommandInfo[]
-  /** How full the context window is. A different meter from the rate limit. */
+  /**
+   * How full the main agent's context window is. A different meter from the
+   * rate limit — and not a Thread's, which has its own window and its own
+   * entry in `threadContext`.
+   */
   context?: ContextUsage
+  /**
+   * How full each Thread's context window is, keyed by Thread.
+   *
+   * Separate from `context` rather than folded into it, because they are
+   * readings of different windows: a background agent 7000 tokens into its own
+   * window says nothing about the main agent's, and writing one over the other
+   * made the Session meter report a window that was nearly full as nearly
+   * empty (#17). Always present, so a viewer reads a Thread's window without
+   * first asking whether any Thread ever reported one.
+   */
+  threadContext: Record<string, ContextUsage>
   /** How much of the subscription is left. A different meter from the context. */
   rateLimit?: RateLimit
   /** What the Session has spent, as the runtime last restated it. */

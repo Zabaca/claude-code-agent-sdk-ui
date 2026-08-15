@@ -77,7 +77,11 @@ export function classify(message: ClassifyInput): Frame[] {
 function agent(m: Rec): Frame[] {
   const thread = str(m['parent_tool_use_id'])
 
-  return [...spoken(m, thread), ...contextUsage(m['context_usage'])]
+  // The Thread reaches the context reading as well as the prose: an assistant
+  // message names one Thread, and everything hanging off it belongs to that
+  // Thread. Handing it only to `spoken` is what made a sub-agent's window read
+  // as the Session's (#17).
+  return [...spoken(m, thread), ...contextUsage(m['context_usage'], thread)]
 }
 
 function spoken(m: Rec, thread: string | undefined): Frame[] {
@@ -385,7 +389,7 @@ function rateLimit(value: unknown): Frame[] {
 }
 
 /** The structured twin of the /context report, when the SDK attaches one. */
-function contextUsage(value: unknown): Frame[] {
+function contextUsage(value: unknown, thread: string | undefined): Frame[] {
   const usage = record(value)
   const totalTokens = usage && num(usage['total_tokens'])
   if (!usage || totalTokens === undefined) return []
@@ -395,6 +399,7 @@ function contextUsage(value: unknown): Frame[] {
   return [
     compact<ContextFrame>({
       kind: 'context',
+      thread,
       model: str(usage['model']),
       totalTokens,
       maxTokens: num(usage['raw_max_tokens']),

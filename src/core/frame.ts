@@ -5,6 +5,36 @@
  * `classify` emits this vocabulary losslessly: a missing Frame forces a
  * consumer to fork the package, whereas a missing component only makes them
  * write a component.
+ *
+ * ## Which Frames carry a Thread, and why the rest cannot
+ *
+ * "Is every kind emitted?" and "is every field carried?" are not the same
+ * question as "does attribution reach every Frame that should have it." The
+ * third one is what #17 was: `context` came off a message that names its
+ * Thread, and `classify` dropped the name.
+ *
+ * The SDK puts `parent_tool_use_id` on exactly four of the messages in the
+ * `SDKMessage` union — `SDKAssistantMessage`, `SDKUserMessage`,
+ * `SDKUserMessageReplay` and `SDKPartialAssistantMessage` — plus
+ * `SDKToolProgressMessage`. Every Frame born of those carries the Thread:
+ * `text`, `reasoning`, `tool-call`, `tool-result`, `image`, `prompt`, and now
+ * `context`, which rides on `SDKAssistantMessage` alongside the others.
+ *
+ * The rest have no Thread to carry, because the message they come from does
+ * not have one to give:
+ *
+ * - `harness` (`system`/`init`), `commands` (`system`/`commands_changed`)
+ * - `compacted` (`system`/`compact_boundary`)
+ * - `hook` (`system`/`hook_started`|`hook_progress`|`hook_response`)
+ * - `recall` (`system`/`memory_recall`)
+ * - `settled`, `failed`, `cost` (`result`)
+ * - `reset` (`conversation_reset`), `rate-limit` (`rate_limit_event`)
+ *
+ * Three of those are cases a Thread really can cause — a long-running
+ * sub-agent compacts, a hook fires on a sub-agent's tool call, a sub-agent
+ * recalls memory — and the screen will show them as the Session's. That is a
+ * limit of the wire, not a decision made here: attributing them would mean
+ * inventing an owner. It needs a field on the SDK message, not a change below.
  */
 export type Frame =
   | SessionFrame
@@ -214,9 +244,19 @@ export type RecalledMemory = {
   content?: string
 }
 
-/** How full the context window is. A different meter from the rate limit. */
+/**
+ * How full the context window is. A different meter from the rate limit.
+ *
+ * A Thread has its own window, so this carries the Thread whose window it
+ * reports. Without it the last reading to arrive won whatever it belonged to,
+ * and a background agent 7000 tokens in silently replaced the main agent's
+ * 190000 — the Session meter reporting a window that was nearly full as nearly
+ * empty (#17).
+ */
 export type ContextFrame = {
   kind: 'context'
+  /** The Thread whose window this is; absent for the main agent's own. */
+  thread?: string
   model?: string
   totalTokens: number
   maxTokens?: number

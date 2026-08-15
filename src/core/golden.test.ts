@@ -112,7 +112,40 @@ describe('the golden Frame log', () => {
     })
     expect(transcript.cost).toMatchObject({ usd: 1.51 })
     expect(transcript.context).toMatchObject({ totalTokens: 44000, maxTokens: 200000 })
+    // The Thread's window is its own meter, on its own model. This says the
+    // two readings are kept apart; it is not the guard against them being
+    // merged — in this log the main agent's reading happens to arrive last, so
+    // last-writer-wins would land on the same number. The test that fails when
+    // they merge is the one below, where the Thread reports last.
+    expect(transcript.threadContext['toolu_task']).toMatchObject({
+      totalTokens: 7000,
+      model: 'claude-haiku-4',
+    })
     expect(transcript.rateLimit).toMatchObject({ status: 'allowed_warning', utilization: 82 })
+  })
+
+  test("keeps the Session's context meter clear of a Thread's own window", () => {
+    // #17. A Thread has its own context window, and the SDK says whose reading
+    // is whose with `parent_tool_use_id` — the same field that attributes
+    // prose and tool calls. `classify` dropped it on the way to a context
+    // Frame, so the last reading to arrive won whatever it belonged to: a
+    // background agent 7000 tokens into a 200000-token window silently
+    // replaced the main agent's 190000, and the Session meter reported a
+    // window that was nearly full as nearly empty.
+    //
+    // Driven through `classify` from the SDK's own message shapes rather than
+    // from hand-written Frames, because a Frame nobody sends proves nothing —
+    // and with the Thread's reading arriving *last*, which is the ordering the
+    // defect needs and the one three concurrent Threads produce constantly.
+    const frames = [reading(null, 190_000), reading('toolu_task', 7_000)].flatMap((message) =>
+      classify(message),
+    )
+    const transcript = reduce(frames)
+
+    expect(transcript.context?.totalTokens).toBe(190_000)
+    expect(transcript.threadContext['toolu_task']?.totalTokens).toBe(7_000)
+    // And the Thread's reading is not also filed as the Session's.
+    expect(transcript.context?.thread).toBeUndefined()
   })
 
   test('answers every call it opened, and shows the interrupt as idle', () => {
@@ -221,3 +254,25 @@ describe('replay', () => {
     ).toEqual(opened)
   })
 })
+
+/**
+ * An assistant message carrying a context reading, in the SDK's own shape.
+ * `parent_tool_use_id` is what says whose window it is: null for the main
+ * agent, the `Task` call's id for a Thread. The SDK hangs `context_usage` off
+ * `SDKAssistantMessage`, which is exactly the message type that carries the
+ * attribution — which is why this one was fixable at all.
+ */
+function reading(thread: string | null, totalTokens: number): ClassifyInput {
+  return {
+    type: 'assistant',
+    session_id: 'sess-golden',
+    parent_tool_use_id: thread,
+    message: { role: 'assistant', content: [{ type: 'text', text: 'working' }] },
+    context_usage: {
+      model: 'claude-opus-4',
+      total_tokens: totalTokens,
+      raw_max_tokens: 200000,
+      percentage: Math.round((totalTokens / 200000) * 100),
+    },
+  }
+}
