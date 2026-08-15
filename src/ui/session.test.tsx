@@ -1147,6 +1147,83 @@ test('whitespace with nothing attached still wills nothing', async () => {
   view.unmount()
 })
 
+test('a picture is described once, and one with no picture is still described', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'image', mediaType: 'image/png', handle: 'img_held' })
+    fake.frame({ kind: 'image', mediaType: 'image/png' })
+  })
+
+  const [held, unheld] = [...document.querySelectorAll('[data-image]')]
+
+  // The caption is verbatim the picture's alt, so a reader who hears both
+  // hears the same sentence twice. The alt is what carries it — it is required
+  // and it is on the picture itself — so the caption beside it is decoration.
+  const heldCaption = held?.querySelector('[data-caption]')
+  const unheldCaption = unheld?.querySelector('[data-caption]')
+  expect(held?.querySelector('img')?.alt).toBe(heldCaption?.textContent?.trim().replace('▣ ', ''))
+  expect(held?.querySelector('img')?.alt).not.toBe('')
+  expect(heldCaption?.getAttribute('aria-hidden')).toBe('true')
+
+  // But only where there *is* a picture to carry it. Hiding the caption
+  // unconditionally would leave the unheld case with no accessible text at
+  // all — silencing the very entry that exists to say something arrived that
+  // cannot be shown.
+  //
+  // Breakage this fails on: `aria-hidden` on the caption without the
+  // condition, which reads as tidier and makes half the states mute.
+  expect(unheld?.querySelector('img')).toBe(null)
+  // Either absent or an explicit "false" — both mean audible; only "true"
+  // would silence it, which is the one thing this is asserting against.
+  expect(unheldCaption?.getAttribute('aria-hidden')).not.toBe('true')
+  expect(unheldCaption?.textContent ?? '').toContain('not held')
+  view.unmount()
+})
+
+test('a picture the host would not hold is refused out loud, not dropped', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await paste(svg('diagram'))
+
+  // Refusing an SVG is right — it is script-capable, and holding one would
+  // mean serving a script from the Session's own origin. Saying nothing about
+  // it is not: the person watches a paste do nothing at all and concludes the
+  // paste did not register, rather than that it was turned down.
+  //
+  // Breakage this fails on: filtering the clipboard down to what is holdable
+  // and letting an empty result fall through as if nothing had been pasted.
+  expect(attached()).toEqual([])
+  expect(refusal()).toContain('image/svg+xml')
+
+  // And it stays refused rather than quietly travelling anyway.
+  await type('what is wrong with this')
+  await enter()
+  expect(wire.posted).toEqual([{ body: { type: 'prompt', text: 'what is wrong with this' } }])
+  view.unmount()
+})
+
+test('a refusal goes away when a picture the host will hold arrives', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await paste(svg('diagram'))
+  expect(refusal()).not.toBe('')
+
+  await paste(png('one'))
+
+  // The other arm, through the same screen. A refusal left standing over a
+  // paste that worked would say the screenshot in the tray had been turned
+  // down — which is the same lie in the opposite direction, and "no refusal
+  // is shown" alone cannot tell a cleared message from one never written.
+  expect(refusal()).toBe('')
+  expect(attached()).toHaveLength(1)
+  view.unmount()
+})
+
 test('pasting words is still pasting words', async () => {
   const fake = fakeSse()
   const wire = recorder()
@@ -1193,6 +1270,16 @@ function shownImages(): string[] {
 /** Every picture on screen, in Transcript order. */
 function pictures(): HTMLImageElement[] {
   return [...document.querySelectorAll<HTMLImageElement>('[data-image] img')]
+}
+
+/** An SVG — an image to the clipboard, and a script to a browser. */
+function svg(body: string): File {
+  return new File([body], `${body}.svg`, { type: 'image/svg+xml' })
+}
+
+/** What the composer says about a paste it turned down. */
+function refusal(): string {
+  return (document.querySelector('[data-paste-refused]')?.textContent ?? '').trim()
 }
 
 /** A PNG whose bytes say which one it is, so two pastes are told apart. */

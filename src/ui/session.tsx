@@ -80,6 +80,8 @@ export function ClaudeSession({
   const [text, setText] = React.useState('')
   /** Pictures pasted in and not yet sent, in the order they were pasted. */
   const [pasted, setPasted] = React.useState<Pasted[]>([])
+  /** What the last paste offered that the host will not hold. */
+  const [refused, setRefused] = React.useState<string[]>([])
   /** Dismissed by esc, and only until the words change. */
   const [dismissed, setDismissed] = React.useState(false)
   const [highlighted, setHighlighted] = React.useState(0)
@@ -170,20 +172,31 @@ export function ClaudeSession({
 
       <Attachments pasted={pasted} onRemove={(at) => setPasted(without(pasted, at))} />
 
+      <Refused types={refused} />
+
       {/* Paste is read here rather than on `ClaudePrompt`, which takes no
           `onPaste` and stays exactly as it was vendored. React's paste event
           bubbles, so listening on the wrapper is wiring rather than a change
           to the component. */}
       <div
         onPaste={(event) => {
-          const files = pictures(event.clipboardData)
+          const files = [...(event.clipboardData?.files ?? [])]
           // Words are still words. Taking every paste would quietly stop a
           // stack trace pasting into the composer the day pictures landed —
           // and the insertion is the browser's default action, so swallowing
           // it leaves nothing on screen to notice.
           if (files.length === 0) return
+          // Files were pasted, so this paste is the composer's — including the
+          // ones it will not hold. Falling through on those instead would let
+          // the browser do nothing with them, which looks exactly like a paste
+          // that never registered.
           event.preventDefault()
-          void Promise.all(files.map(held)).then((held) => {
+          const holdable = files.filter((file) => HOLDABLE.has(file.type))
+          setRefused(
+            files.filter((file) => !HOLDABLE.has(file.type)).map((file) => file.type || file.name),
+          )
+          if (holdable.length === 0) return
+          void Promise.all(holdable.map(held)).then((held) => {
             setPasted((already) => [...already, ...held.filter(there)])
           })
         }}
@@ -230,6 +243,7 @@ export function ClaudeSession({
             // again with the next Turn, which is the composer showing one
             // thing and the wire carrying another.
             setPasted([])
+            setRefused([])
           }}
           placeholder={placeholder}
           mode={session.mode}
@@ -284,21 +298,39 @@ function Attachments({ pasted, onRemove }: { pasted: Pasted[]; onRemove: (at: nu
   )
 }
 
+/**
+ * What the last paste offered that the host will not hold.
+ *
+ * The refusal itself is right: an SVG is script-capable, so holding one would
+ * mean serving a script back from the Session's own origin. What would be
+ * wrong is doing it quietly. A paste that vanishes reads as a paste that never
+ * registered — the person tries again, and again — so the composer says which
+ * kind it turned down and leaves the reason where the picture would have gone.
+ *
+ * `aria-live` rather than `role="status"` on purpose: the working line already
+ * holds that role, and a second one would make "is the agent working?"
+ * ambiguous to a screen reader and to `getByRole('status')` alike. This still
+ * announces; it just does not claim to be the Session's status.
+ */
+function Refused({ types }: { types: string[] }) {
+  if (types.length === 0) return null
+  return (
+    <p
+      data-paste-refused
+      aria-live="polite"
+      className="cc:min-w-0 cc:break-words"
+      style={{ color: 'var(--cc-fg-dim)' }}
+    >
+      <span aria-hidden>▣ </span>
+      {types.length === 1 ? 'Not attached: ' : `${types.length} not attached: `}
+      {types.join(', ')} — the agent can be shown PNG, JPEG, GIF or WebP.
+    </p>
+  )
+}
+
 /** The list without the one at `at`. */
 function without<T>(items: T[], at: number): T[] {
   return items.filter((_, index) => index !== at)
-}
-
-/**
- * The pictures on the clipboard, and only the pictures.
- *
- * A clipboard carrying a file the host would not hold is left alone rather than
- * carried as far as the handler and refused there: the person would have lost
- * the paste and been told nothing about why.
- */
-function pictures(clipboard: DataTransfer | null): File[] {
-  const files: File[] = [...(clipboard?.files ?? [])]
-  return files.filter((file) => HOLDABLE.has(file.type))
 }
 
 /**
@@ -805,7 +837,11 @@ function Picture({ message, src }: { message: ImageMessage; src: (handle: string
       className="cc:flex cc:min-w-0 cc:flex-col cc:gap-1"
       style={{ color: 'var(--cc-fg-muted)' }}
     >
-      <span>
+      {/* Hidden from a reader exactly when the picture below carries the same
+          sentence as its `alt`, so it is heard once rather than twice — and
+          never hidden when there is no picture, because then this caption is
+          the only thing saying an image arrived that cannot be shown. */}
+      <span data-caption aria-hidden={handle !== undefined}>
         <span aria-hidden>▣ </span>
         {describing(message)}
         {handle === undefined ? ' — not held' : ''}

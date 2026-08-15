@@ -23,9 +23,23 @@ export type { PartialText } from '../core/partial.ts'
  * reload wants. Two named events come down it: `frame`, one retained Frame with
  * its index as `id:`, and `partial`, live text carrying no `id:` at all.
  *
+ * `GET` also serves a held picture at `?image=<handle>`, by the handle the host
+ * minted for it — a map lookup, never path arithmetic. See `images.ts`.
+ *
  * `POST` carries an {@link AgentEvent}. The client may never name `cwd`,
- * `tools`, `permissionMode` or `systemPrompt` (ADR-0001) — nothing but `type`
- * and `text` is ever read off a request, so there is nowhere to name them.
+ * `tools`, `permissionMode` or `systemPrompt` (ADR-0001), and the way that is
+ * enforced is that **a request reaches no configuration at all**: every option
+ * the query runs under comes from {@link AgentHandlerOptions}, which only the
+ * host constructing the handler can supply, and `#queryOptions` reads nothing
+ * else. A field arriving on a request can therefore become content — words, or
+ * a picture — and can never become a setting.
+ *
+ * Stated that way round on purpose. The list of fields actually read off a
+ * request is `type`, `text` and `images`, and it will grow again; a doc that
+ * recites the list is a doc that goes stale silently, on the one boundary where
+ * a stale claim is worse than none, because the next person reasons from it
+ * instead of re-deriving it. What does not grow is the set of things a request
+ * can reach, and that is the invariant worth writing down.
  */
 export type AgentHandler = (request: Request) => Promise<Response>
 
