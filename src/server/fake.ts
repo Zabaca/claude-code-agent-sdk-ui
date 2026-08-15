@@ -4,6 +4,7 @@ import type {
   AgentQuery,
   AgentQueryFactory,
   AgentQueryParams,
+  AgentSlashCommand,
 } from './handler.ts'
 import { pushable } from './pushable.ts'
 
@@ -29,34 +30,98 @@ export type FakeQuery = {
   interrupts: number
   /** What `interrupt()` does; by default it says nothing and waits. */
   onInterrupt?: (fake: FakeQuery) => void
+  /** How many times `supportedCommands()` was asked, and never answered twice. */
+  describeCalls: number
+  /**
+   * Answers whatever `supportedCommands()` is outstanding — and answers it
+   * where the runtime answers it: **on the message stream**, behind everything
+   * already queued on it.
+   *
+   * That is the whole hazard, made reproducible. The reply is only delivered
+   * once the reader pulls it, so a handler that awaits `supportedCommands()`
+   * from inside its own message loop stops pulling, never reaches this reply,
+   * and waits forever for something only it can deliver. Answering out of band
+   * would make the fake unable to fail on the defect it exists to catch.
+   */
+  describes(commands: AgentSlashCommand[]): void
+  /** Answers it by throwing, as a runtime that could not describe itself does. */
+  describeBreaks(error: unknown): void
 }
 
+/** A control reply riding the message stream. Never yielded as a Message. */
+type Reply = { answer(): void }
+
 export function fakeQuery(): FakeQuery {
-  const messages = pushable<ClassifyInput>()
+  const stream = pushable<ClassifyInput | Reply>()
+  let asked: ((commands: AgentSlashCommand[]) => void)[] = []
+  let refused: ((error: unknown) => void)[] = []
+
+  /** Everything on the stream except the control replies, which are consumed. */
+  async function* messages(): AsyncGenerator<ClassifyInput> {
+    for await (const item of stream) {
+      if (isReply(item)) {
+        item.answer()
+        continue
+      }
+      yield item
+    }
+  }
 
   const fake: FakeQuery = {
     calls: [],
     prompts: [],
     interrupts: 0,
-    say: (message) => messages.push(message),
-    end: () => messages.end(),
-    break: (error) => messages.fail(error),
+    describeCalls: 0,
+    say: (message) => stream.push(message),
+    end: () => stream.end(),
+    break: (error) => stream.fail(error),
+    describes: (commands) => {
+      stream.push({
+        answer: () => {
+          const waiting = asked
+          asked = []
+          refused = []
+          for (const resolve of waiting) resolve(commands)
+        },
+      })
+    },
+    describeBreaks: (error) => {
+      stream.push({
+        answer: () => {
+          const waiting = refused
+          asked = []
+          refused = []
+          for (const reject of waiting) reject(error)
+        },
+      })
+    },
     createQuery: (params) => {
       fake.calls.push(params)
       void collect(params.prompt, fake.prompts)
       const query: AgentQuery = {
-        [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](),
+        [Symbol.asyncIterator]: () => messages(),
         interrupt: async () => {
           fake.interrupts += 1
           fake.onInterrupt?.(fake)
         },
-        close: () => messages.end(),
+        close: () => stream.end(),
+        supportedCommands: () => {
+          fake.describeCalls += 1
+          return new Promise<AgentSlashCommand[]>((resolve, reject) => {
+            asked.push(resolve)
+            refused.push(reject)
+          })
+        },
       }
       return query
     },
   }
 
   return fake
+}
+
+function isReply(item: ClassifyInput | Reply): item is Reply {
+  return typeof (item as Reply).answer === 'function'
 }
 
 async function collect(prompt: AsyncIterable<AgentPromptMessage>, into: AgentPromptMessage[]) {

@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 
+import type { SlashCommandInfo } from '../core/frame.ts'
 import type {
   CompactedMessage,
   HookMessage,
@@ -44,8 +45,24 @@ export function ClaudeSession({
   className?: string
 }) {
   const [text, setText] = React.useState('')
+  /** Dismissed by esc, and only until the words change. */
+  const [dismissed, setDismissed] = React.useState(false)
+  const [highlighted, setHighlighted] = React.useState(0)
   const { transcript } = session
   const working = transcript.turn.status === 'working'
+
+  // What the runtime advertises, narrowed to what has been typed. Derived every
+  // render rather than held, so a `commands` Frame arriving mid-Session — a
+  // skill the agent discovered while working in a subdirectory — is in the menu
+  // the moment it lands, with nothing to invalidate.
+  const offered = dismissed ? [] : matching(transcript.commands, text)
+  const active = offered.length === 0 ? 0 : Math.min(highlighted, offered.length - 1)
+
+  const say = (words: string) => {
+    setText(words)
+    setDismissed(false)
+    setHighlighted(0)
+  }
 
   return (
     <div
@@ -86,15 +103,43 @@ export function ClaudeSession({
         </div>
       ) : null}
 
+      <SlashMenu commands={offered} active={active} onHighlight={setHighlighted} />
+
       <ClaudePrompt
         value={text}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => say(event.target.value)}
+        onKeyDown={(event) => {
+          if (offered.length === 0) return
+          const chosen = offered[active]
+
+          if (event.key === 'ArrowDown') {
+            event.preventDefault()
+            setHighlighted((at) => (at + 1) % offered.length)
+          } else if (event.key === 'ArrowUp') {
+            event.preventDefault()
+            setHighlighted((at) => (at - 1 + offered.length) % offered.length)
+          } else if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && chosen) {
+            // Takes the highlighted command instead of sending. Sending `/c`
+            // would run a command nobody has, and would do it while a menu was
+            // on screen saying `/c` is not yet one. `preventDefault` is what
+            // `ClaudePrompt` reads to know its own submit was spoken for.
+            event.preventDefault()
+            say(`/${bare(chosen.name)} `)
+          } else if (event.key === 'Escape') {
+            // The Session binds esc to interrupt. While a menu is open esc is
+            // the menu's, so dismissing a palette does not kill the Turn behind
+            // it — which is why this stops here rather than bubbling.
+            event.preventDefault()
+            event.stopPropagation()
+            setDismissed(true)
+          }
+        }}
         onSubmit={(value) => {
           // `send` is what decides whether these words start a Turn — the
           // container does not second-guess it — but the composer is emptied
           // either way, as the terminal's is.
           session.send(value)
-          setText('')
+          say('')
         }}
         placeholder={placeholder}
         mode={session.mode}
@@ -110,6 +155,105 @@ export function ClaudeSession({
       />
     </div>
   )
+}
+
+/**
+ * The slash palette: what the runtime advertises, narrowed to what is typed.
+ *
+ * Sending a slash command was always free — it is text that starts with `/` —
+ * so what is delivered here is discovery: the argument hint says what to type
+ * after the name, and the aliases say that `/cost` and `/usage` are the same
+ * thing. A name alone says a command exists and nothing about using it.
+ *
+ * Drawn here rather than by the vendored `ClaudeSlashMenu`, which stays exported
+ * and usable on its own. Upstream's menu renders a `ClaudePrompt` of its own and
+ * takes no `value` or `onSubmit`, so putting it in a live Session would mean two
+ * composers on screen, or one that cannot send. Wiring it would have meant
+ * changing it. The rows keep its shape — its colour tokens and its fixed name
+ * column — so the two read as one interface.
+ */
+const NAME_COLS = 22
+
+function SlashMenu({
+  commands,
+  active,
+  onHighlight,
+}: {
+  commands: SlashCommandInfo[]
+  active: number
+  onHighlight: (at: number) => void
+}) {
+  // No empty box: a palette offering nothing is a palette in the way.
+  if (commands.length === 0) return null
+  return (
+    <ul
+      role="listbox"
+      aria-label="Slash commands"
+      aria-activedescendant={`cc-slash-${active}`}
+      className="cc:min-w-0 cc:space-y-0.5"
+    >
+      {commands.map((command, at) => (
+        <li
+          key={command.name}
+          id={`cc-slash-${at}`}
+          role="option"
+          aria-selected={at === active}
+          data-command={`/${bare(command.name)}`}
+          onMouseEnter={() => onHighlight(at)}
+          className="cc:min-w-0 cc:cursor-pointer cc:truncate cc:px-1 cc:py-0.5"
+          style={{
+            color: at === active ? 'var(--cc-slash-active)' : 'var(--cc-slash-inactive)',
+          }}
+        >
+          <span className="cc:inline-block" style={{ width: `${NAME_COLS}ch` }}>
+            /{bare(command.name)}
+            {command.argumentHint === undefined ? null : ` ${command.argumentHint}`}
+          </span>
+          {command.description ?? ''}
+          {command.aliases === undefined || command.aliases.length === 0 ? null : (
+            <span style={{ color: 'var(--cc-fg-dim)' }}>
+              {' '}
+              (also {command.aliases.map((alias) => `/${bare(alias)}`).join(', ')})
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/**
+ * What the typed words are asking for. Nothing until a `/` starts them, and
+ * nothing again once the person is past the name and into the arguments — no
+ * rule of its own is needed for that, because a command name has no space in
+ * it, so nothing is a prefix of what has been typed any more.
+ *
+ * Aliases match as well as names, because a menu that only matched names would
+ * leave `/cost` looking like a command that does not exist. The command found
+ * is still the one that runs, which is what the row shows.
+ */
+function matching(commands: SlashCommandInfo[], text: string): SlashCommandInfo[] {
+  if (!text.startsWith('/')) return []
+  const typed = text.slice(1).toLowerCase()
+  return commands.filter((command) =>
+    [command.name, ...(command.aliases ?? [])].some((name) =>
+      bare(name).toLowerCase().startsWith(typed),
+    ),
+  )
+}
+
+/**
+ * A command's name without the `/` this draws itself.
+ *
+ * The SDK documents `SlashCommand.name` as carrying no leading slash, and
+ * `classify` keeps whatever it was given rather than tidying it — a Frame is an
+ * observation. The tidying belongs here, where the slash is drawn, and it is
+ * done because getting it wrong is silent: a name that arrived as `/clear` is
+ * not a prefix of anything anyone types, so the menu would answer every
+ * keystroke with nothing at all rather than with a visible mistake.
+ */
+function bare(name: string): string {
+  return name.startsWith('/') ? name.slice(1) : name
 }
 
 /**
