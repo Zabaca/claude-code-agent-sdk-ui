@@ -3,9 +3,10 @@ import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import { classify, type ClassifyInput } from '../core/classify.ts'
 import type { PromptImage } from '../core/event.ts'
 import type { FailedFrame, Frame, ImageFrame, SettledFrame, SlashCommandInfo } from '../core/frame.ts'
+import { holdable } from '../core/image.ts'
 import { blockAt, type PartialKind, type PartialText } from '../core/partial.ts'
 import { frameEvent, partialEvent, resumeFrom } from '../core/wire.ts'
-import { imageStore, SERVABLE, type ImageStore } from './images.ts'
+import { imageStore, type ImageStore } from './images.ts'
 import { pushable, type Pushable } from './pushable.ts'
 
 // The willed half of the vocabulary, and the live text that is neither half,
@@ -655,8 +656,8 @@ function imagesIn(value: unknown): PromptImage[] | undefined {
     const image = record(entry)
     const mediaType = image && str(image['mediaType'])
     const data = image && str(image['data'])
-    if (mediaType === undefined || data === undefined || data === '') return undefined
-    if (!SERVABLE.has(mediaType)) return undefined
+    if (mediaType === undefined || data === undefined) return undefined
+    if (!holdable({ mediaType, data })) return undefined
     images.push({ mediaType, data })
   }
   return images

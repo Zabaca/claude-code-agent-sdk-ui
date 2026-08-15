@@ -469,6 +469,36 @@ async function mount(replay: ReplayTransport): Promise<{ unmount(): void }> {
 }
 
 /** Lets everything queued play out and React flush what it produced. */
+test('replay refuses a picture live would refuse, rather than drawing one', async () => {
+  const replay = replayTransport({ wait: immediately, script: SCRIPT })
+  const before = replay.log.filter((frame) => frame.kind === 'image').length
+
+  await replay.fetch('/api/agent', {
+    method: 'POST',
+    headers: {},
+    body: JSON.stringify({
+      type: 'prompt',
+      text: 'look at this',
+      images: [
+        { mediaType: 'text/html', data: btoa('<script>alert(1)</script>') },
+        { mediaType: 'image/png', data: 'not base64 at all!!' },
+      ],
+    }),
+  })
+  await drain(replay)
+
+  // The handler answers 400 to this Event, on both counts: a `text/html`
+  // "image" is the stored-XSS shape, and a payload that is not base64 is not a
+  // picture. Replay is not a guard — it takes the words rather than refusing
+  // the Event — but it must not mint a handle for something live would never
+  // hold. A picture drawn here and a 400 there is replay lying about what a
+  // paste is, which is the one thing this transport exists not to do.
+  expect(replay.log.filter((frame) => frame.kind === 'image').length).toBe(before)
+  expect(replay.log.some((frame) => frame.kind === 'prompt' && frame.text === 'look at this')).toBe(
+    true,
+  )
+})
+
 async function drain(replay: ReplayTransport): Promise<void> {
   await act(async () => {
     await replay.quiet()

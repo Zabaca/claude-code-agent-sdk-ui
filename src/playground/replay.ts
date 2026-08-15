@@ -1,4 +1,5 @@
 import type { Frame, SlashCommandInfo } from '../core/frame.ts'
+import { holdable } from '../core/image.ts'
 import type { PartialText } from '../core/partial.ts'
 import type { AgentEventSource, AgentEventSourceFactory, AgentFetch } from '../react/session.ts'
 
@@ -198,15 +199,19 @@ function parse(body: string): { type?: string; text?: unknown; images?: unknown 
 /**
  * The pictures out of a prompt Event, and nothing that is not one.
  *
- * The handler validates this and refuses the whole Event if it does not hold;
- * replay is not a guard, so it takes what is shaped right and ignores the rest.
+ * The handler refuses the whole Event when one does not hold; replay is not a
+ * guard, so it drops what will not hold and plays the rest. What it must not do
+ * is *disagree* about which is which — a media type replay draws and live
+ * answers 400 to is replay lying about what a paste is.
  */
 function imagesIn(value: unknown): { mediaType: string; data: string }[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((entry) => {
     const one = entry as { mediaType?: unknown; data?: unknown }
-    return typeof one?.mediaType === 'string' && typeof one.data === 'string'
-      ? [{ mediaType: one.mediaType, data: one.data }]
+    const mediaType = typeof one?.mediaType === 'string' ? one.mediaType : undefined
+    const data = typeof one?.data === 'string' ? one.data : undefined
+    return mediaType !== undefined && data !== undefined && holdable({ mediaType, data })
+      ? [{ mediaType, data }]
       : []
   })
 }

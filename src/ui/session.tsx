@@ -5,6 +5,7 @@ import * as React from 'react'
 import { forgetImage, imageMarker } from '../core/composer.ts'
 import type { PromptImage } from '../core/event.ts'
 import type { SlashCommandInfo } from '../core/frame.ts'
+import { HOLDABLE } from '../core/image.ts'
 import type {
   CompactedMessage,
   HookMessage,
@@ -415,8 +416,6 @@ function caretIn(target: EventTarget | null): number | undefined {
  * leaves the browser. The handler enforces this again on the way in — this is
  * a courtesy to the person, not the check that matters.
  */
-const HOLDABLE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
-
 /**
  * A pasted file as a payload the wire can carry: base64, and no `data:` prefix.
  * A data URI is a location with the bytes inlined, and the Event vocabulary
