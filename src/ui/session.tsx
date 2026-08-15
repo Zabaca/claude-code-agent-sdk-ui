@@ -388,9 +388,10 @@ function Hook({ message }: { message: HookMessage }) {
     <Marker
       kind="hook"
       glyph="⚑"
-      label={`Hook ${message.name} — ${message.status}`}
+      label={`Hook ${message.name}`}
       status={message.status}
       details={[
+        message.status,
         message.hookEvent,
         message.output,
         message.stderr,
