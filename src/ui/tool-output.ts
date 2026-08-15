@@ -1,5 +1,6 @@
 import type { ToolCallMessage } from '../core/transcript.ts'
 import type { DiffLine } from './claude-diff.tsx'
+import type { Todo } from './claude-todo-list.tsx'
 
 /**
  * What a tool answered, read into the props the components already take.
@@ -136,6 +137,55 @@ function summaryOf(created: boolean, additions: number, removals: number): strin
 
 function count(many: number, noun: string): string {
   return `${many} ${noun}${many === 1 ? '' : 's'}`
+}
+
+/**
+ * The agent's plan, as `TodoWrite` states it, or `undefined` where there is no
+ * list to draw.
+ *
+ * Read from the result where there is one and from the call's own input where
+ * there is not. The input is not a fallback for its own sake: it is the list
+ * the moment the call starts, so the plan is on screen before the tool answers
+ * — and it is the only copy left when `classify` withholds the structured
+ * output because one message answered several calls at once.
+ *
+ * A call that failed draws no list. The plan it names was not the one adopted.
+ */
+export function todosOf(message: ToolCallMessage): Todo[] | undefined {
+  if (message.status === 'error') return undefined
+
+  const answered = record(message.structured)?.['newTodos']
+  const todos = entriesIn(answered) ?? entriesIn(message.input['todos'])
+  return todos !== undefined && todos.length > 0 ? todos : undefined
+}
+
+/** What the SDK calls each state, and what `ClaudeTodoList` draws it as. */
+const STATE: Record<string, Todo['status']> = {
+  completed: 'done',
+  in_progress: 'active',
+  pending: 'todo',
+}
+
+function entriesIn(value: unknown): Todo[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  return value.flatMap((item): Todo[] => {
+    const entry = record(item)
+    // `activeForm` is the same task said in the present tense, so it stands in
+    // where there is no `content` rather than leaving a row with no words.
+    const label = entry && (str(entry['content']) ?? str(entry['activeForm']))
+    if (label === undefined) return []
+
+    const said = entry && str(entry['status'])
+    const status = said === undefined ? undefined : STATE[said]
+    // A state this build has no glyph for. Drawn as ◻ alone it would report,
+    // say, a cancelled task as one still to do — the wrong state, drawn with
+    // full confidence. Dropping the row loses the task altogether. So the row
+    // stays and carries the runtime's own word for where it stands.
+    if (status === undefined) {
+      return [{ label: said === undefined ? label : `${label} (${said})`, status: 'todo' }]
+    }
+    return [{ label, status }]
+  })
 }
 
 /** Hunks that are actually usable. One missing its starts cannot be numbered. */

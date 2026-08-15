@@ -294,6 +294,92 @@ test('a "no newline at end of file" note does not consume a line number', async 
   view.unmount()
 })
 
+// --- the agent's plan ----------------------------------------------------------
+
+const PLAN = [
+  { content: 'Read the spec', status: 'completed', activeForm: 'Reading the spec' },
+  { content: 'Wire the diff', status: 'in_progress', activeForm: 'Wiring the diff' },
+  { content: 'Add the replay case', status: 'pending', activeForm: 'Adding the replay case' },
+]
+
+test("a TodoWrite is drawn as the agent's list, each item in the state it is in", async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({
+      kind: 'tool-call',
+      id: 'toolu_todo',
+      name: 'TodoWrite',
+      input: { todos: PLAN },
+    })
+    fake.frame({
+      kind: 'tool-result',
+      id: 'toolu_todo',
+      output: 'Todos have been modified successfully',
+      isError: false,
+      structured: { oldTodos: [], newTodos: PLAN },
+    })
+  })
+
+  // Glyph, words and announced state are read together. A list whose three
+  // rows all render ◻ is still "a todo list on screen" — and says nothing
+  // true about what the agent has done, is doing, or has not started.
+  expect(todos()).toEqual([
+    '⎿ ✔ Read the spec (completed)',
+    '◼ Wire the diff (in progress)',
+    '◻ Add the replay case (pending)',
+  ])
+  view.unmount()
+})
+
+test('the plan is on screen while the call is still in flight', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  // The list is the call's own input, so it is renderable before the tool
+  // answers — and it is the only copy that survives when `classify` withholds
+  // the structured output because one message answered several calls.
+  await act(async () => {
+    fake.frame({
+      kind: 'tool-call',
+      id: 'toolu_todo',
+      name: 'TodoWrite',
+      input: { todos: PLAN },
+    })
+  })
+
+  expect(todos()).toEqual([
+    '⎿ ✔ Read the spec (completed)',
+    '◼ Wire the diff (in progress)',
+    '◻ Add the replay case (pending)',
+  ])
+  view.unmount()
+})
+
+test('a state this build does not know is not quietly drawn as pending', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({
+      kind: 'tool-call',
+      id: 'toolu_todo',
+      name: 'TodoWrite',
+      input: {
+        todos: [{ content: 'Ship it', status: 'cancelled', activeForm: 'Shipping it' }],
+      },
+    })
+  })
+
+  // `ClaudeTodoList` has three states and the SDK may grow a fourth. Mapping
+  // an unknown one onto ◻ would report a cancelled task as one still to do —
+  // the wrong state, drawn confidently. Dropping the row is worse still: the
+  // task vanishes. So it renders, and says what it actually is.
+  expect(todos()).toEqual(['⎿ ◻ Ship it (cancelled) (pending)'])
+  view.unmount()
+})
+
 // --- reading what is on screen ------------------------------------------------
 
 /**
@@ -319,6 +405,19 @@ function said(file: string): string {
   const diff = document.querySelector(`[data-diff="${file}"]`)
   if (!diff) throw new Error(`no diff for ${file}`)
   return diff.textContent ?? ''
+}
+
+/**
+ * Each row of the agent's plan: its glyph, its words, and the state announced
+ * to a reader, in one string. Read apart, a row asserted only by its words
+ * passes in whatever state it happens to be drawn.
+ */
+function todos(): string[] {
+  const list = document.querySelector('[data-todos]')
+  if (!list) throw new Error('no todo list')
+  return [...list.querySelectorAll('li')].map((row) =>
+    (row.textContent ?? '').replace(/\s+/g, ' ').trim(),
+  )
 }
 
 /** What a plain tool line claims about how the call went. */
