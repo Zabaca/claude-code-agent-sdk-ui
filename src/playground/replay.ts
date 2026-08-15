@@ -1,4 +1,4 @@
-import type { Frame } from '../core/frame.ts'
+import type { Frame, SlashCommandInfo } from '../core/frame.ts'
 import type { PartialText } from '../core/partial.ts'
 import type { AgentEventSource, AgentEventSourceFactory, AgentFetch } from '../react/session.ts'
 
@@ -200,6 +200,23 @@ export function tool(call: {
 }
 
 /**
+ * What the runtime advertises at `init`, described rather than merely named —
+ * which is what `supportedCommands()` adds and what the menu is for. `/usage`
+ * carries both an argument hint and aliases, because those are the two things a
+ * bare name cannot say and the two a reviewer should be able to see.
+ */
+const COMMANDS: SlashCommandInfo[] = [
+  { name: 'commit', description: 'Commit the working tree', argumentHint: '[message]' },
+  { name: 'effort', description: 'Change how hard the model thinks', argumentHint: '<level>' },
+  {
+    name: 'usage',
+    description: 'Show what this Session has spent',
+    argumentHint: '[window]',
+    aliases: ['cost', 'stats'],
+  },
+]
+
+/**
  * The opening script. Scoped to what is drawn end to end — a replay log that
  * showed a surface nothing draws yet would be a demo of an absence — and each
  * ticket adds its own case as it earns one.
@@ -226,10 +243,7 @@ export const OPENING: Beat[] = [
   {
     frame: {
       kind: 'commands',
-      commands: [
-        { name: 'commit', description: 'Commit the working tree' },
-        { name: 'effort', description: 'Change how hard the model thinks' },
-      ],
+      commands: COMMANDS,
     },
   },
   { after: 260, frame: { kind: 'prompt', text: 'the suite is flaky — find out why' } },
@@ -252,6 +266,20 @@ export const OPENING: Beat[] = [
     failed: true,
     takes: 900,
   }),
+  // The agent has worked its way into a subdirectory and the runtime has found
+  // a skill there, so it pushes the whole list again — REPLACE semantics, which
+  // is why everything that survives has to be restated. Scripted here rather
+  // than only in a test, because "the menu updates mid-Session" is a claim a
+  // reviewer should be able to watch happen.
+  {
+    frame: {
+      kind: 'commands',
+      commands: [
+        ...COMMANDS,
+        { name: 'flake', description: 'Re-run a test until it fails', argumentHint: '<test>' },
+      ],
+    },
+  },
   ...prose('There it is. The fixture is regenerated per run; pinning it.', { block: 2 }),
   ...tool({
     id: 'toolu_edit',

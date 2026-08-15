@@ -167,6 +167,26 @@ test('the opening log plays every divergence, and each reaches the screen', asyn
   view.unmount()
 })
 
+test('the opening log advertises commands, and changes them while it runs', async () => {
+  // The same guard, for this ticket's case. A demo that showed bare names would
+  // be a demo of exactly the thing the menu already had before #11 — the point
+  // is the hint and the aliases — and one that advertised a list and never
+  // touched it would leave `commands_changed` claimed but never shown.
+  const frames = OPENING.flatMap((beat) => (beat.frame ? [beat.frame] : []))
+  const advertised = frames.filter((frame) => frame.kind === 'commands')
+  expect(advertised.length).toBeGreaterThan(1)
+
+  const last = reduce(frames).commands
+  expect(last.some((command) => command.argumentHint !== undefined)).toBe(true)
+  expect(last.some((command) => (command.aliases?.length ?? 0) > 0)).toBe(true)
+
+  // REPLACE semantics, so the later list is the one that stands — and it is not
+  // the one `init` gave, or nothing was demonstrated.
+  expect(last.map((command) => command.name)).not.toEqual(
+    advertised[0]?.kind === 'commands' ? advertised[0].commands.map((one) => one.name) : [],
+  )
+})
+
 // --- driving the seam ---------------------------------------------------------
 
 /** Which divergence each marker reports, in Transcript order. */

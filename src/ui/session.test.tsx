@@ -674,6 +674,26 @@ test('a command the runtime advertises mid-Session is reachable at once', async 
   view.unmount()
 })
 
+test('a name that arrives with its slash already on it is still reachable', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  // The SDK documents `SlashCommand.name` as carrying no leading slash, and
+  // `classify` keeps what it is given rather than tidying it. If that ever
+  // stops holding, the failure is silent rather than ugly: `/clear` is not a
+  // prefix of anything anyone types, so the menu answers every keystroke with
+  // nothing at all. The breakage this fails on is drawing `//clear` and
+  // matching nothing.
+  await act(async () => {
+    fake.frame({ kind: 'commands', commands: [{ name: '/clear', description: 'Clear it' }] })
+  })
+  await type('/cl')
+
+  expect(offered()).toEqual(['/clear'])
+  expect(screen.getByRole('option').textContent).not.toContain('//clear')
+  view.unmount()
+})
+
 test('a runtime that advertises nothing offers nothing', async () => {
   const fake = fakeSse()
   const view = await mount(fake)

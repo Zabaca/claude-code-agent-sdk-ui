@@ -77,7 +77,86 @@ test('a Turn nobody stopped still reads as settled', async () => {
   view.unmount()
 })
 
+/**
+ * The slash menu, driven from where its contents actually come from.
+ *
+ * A unit test can feed the container a `commands` Frame of any shape it likes,
+ * and the last defect on this project lived in exactly that gap — a Frame the
+ * server never sends. So nothing here names a Frame: what goes in is an SDK
+ * `init`, a `supportedCommands()` reply and a `commands_changed`, and what comes
+ * out is read off the screen. Everything between is the real handler, the real
+ * `classify`, the real `reduce` and the real container.
+ */
+test('what the runtime advertises is what the menu offers', async () => {
+  const sdk = fakeQuery()
+  const view = await mount(createAgentHandler({ createQuery: sdk.createQuery }))
+
+  await type('say hi')
+  await enter()
+  await said(sdk, initAdvertising('sess-slash', ['clear', 'usage']))
+
+  // `init` advertises bare names, so that is all there is to go on at first.
+  await type('/u')
+  expect(offered()).toEqual(['/usage'])
+  expect(row()).not.toContain('[window]')
+
+  // The runtime describes them, on the same transport the messages travel.
+  sdk.describes([
+    {
+      name: 'usage',
+      description: 'Show what this Session has spent',
+      argumentHint: '[window]',
+      aliases: ['cost', 'stats'],
+    },
+  ])
+  await said(sdk, says('Hello there'), settled())
+
+  // The hint and the aliases are the whole reason for asking, and they only
+  // reach the screen if every layer between carries them: the handler's reader,
+  // the Frame, `reduce`'s REPLACE, and the row.
+  expect(row()).toContain('Show what this Session has spent')
+  expect(row()).toContain('[window]')
+  expect(row()).toContain('/cost')
+
+  // And the alias resolves, which is the thing a bare name cannot do.
+  await type('/cos')
+  expect(offered()).toEqual(['/usage'])
+
+  view.unmount()
+})
+
+test('a skill discovered mid-Session is in the menu without a reload', async () => {
+  const sdk = fakeQuery()
+  const view = await mount(createAgentHandler({ createQuery: sdk.createQuery }))
+
+  await type('work in packages/api')
+  await enter()
+  await said(sdk, initAdvertising('sess-changed', ['clear']))
+
+  await type('/dep')
+  expect(offered()).toEqual([])
+
+  // The SDK pushes the whole list again when it changes — REPLACE semantics,
+  // which is why `/clear` goes with it.
+  await said(sdk, commandsChanged())
+  expect(offered()).toEqual(['/deploy'])
+  await type('/cl')
+  expect(offered()).toEqual([])
+
+  view.unmount()
+})
+
 // --- driving the seam ---------------------------------------------------------
+
+/** The command names the menu is offering, in the order it offers them. */
+function offered(): string[] {
+  return screen.queryAllByRole('option').map((one) => one.getAttribute('data-command') ?? '')
+}
+
+/** What the one offered row says. */
+function row(): string {
+  return screen.getByRole('option').textContent ?? ''
+}
 
 const endpoint = 'http://localhost/agent'
 
@@ -215,6 +294,20 @@ function init(sessionId: string): ClassifyInput {
     model: 'claude-opus-4',
     cwd: '/work',
     permissionMode: 'bypassPermissions',
+  }
+}
+
+/** `init`, with the bare command names the runtime advertises on it. */
+function initAdvertising(sessionId: string, commands: string[]): ClassifyInput {
+  return { ...init(sessionId), slash_commands: commands }
+}
+
+/** What the SDK pushes when the list changes under the agent's feet. */
+function commandsChanged(): ClassifyInput {
+  return {
+    type: 'system',
+    subtype: 'commands_changed',
+    commands: [{ name: 'deploy', description: 'Ship it', argumentHint: '<env>' }],
   }
 }
 

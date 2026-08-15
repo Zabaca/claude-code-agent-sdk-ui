@@ -124,7 +124,7 @@ export function ClaudeSession({
             // on screen saying `/c` is not yet one. `preventDefault` is what
             // `ClaudePrompt` reads to know its own submit was spoken for.
             event.preventDefault()
-            say(`/${chosen.name} `)
+            say(`/${bare(chosen.name)} `)
           } else if (event.key === 'Escape') {
             // The Session binds esc to interrupt. While a menu is open esc is
             // the menu's, so dismissing a palette does not kill the Turn behind
@@ -198,7 +198,7 @@ function SlashMenu({
           id={`cc-slash-${at}`}
           role="option"
           aria-selected={at === active}
-          data-command={`/${command.name}`}
+          data-command={`/${bare(command.name)}`}
           onMouseEnter={() => onHighlight(at)}
           className="cc:min-w-0 cc:cursor-pointer cc:truncate cc:px-1 cc:py-0.5"
           style={{
@@ -206,14 +206,14 @@ function SlashMenu({
           }}
         >
           <span className="cc:inline-block" style={{ width: `${NAME_COLS}ch` }}>
-            /{command.name}
+            /{bare(command.name)}
             {command.argumentHint === undefined ? null : ` ${command.argumentHint}`}
           </span>
           {command.description ?? ''}
           {command.aliases === undefined || command.aliases.length === 0 ? null : (
             <span style={{ color: 'var(--cc-fg-dim)' }}>
               {' '}
-              (also {command.aliases.map((alias) => `/${alias}`).join(', ')})
+              (also {command.aliases.map((alias) => `/${bare(alias)}`).join(', ')})
             </span>
           )}
         </li>
@@ -237,9 +237,23 @@ function matching(commands: SlashCommandInfo[], text: string): SlashCommandInfo[
   const typed = text.slice(1).toLowerCase()
   return commands.filter((command) =>
     [command.name, ...(command.aliases ?? [])].some((name) =>
-      name.toLowerCase().startsWith(typed),
+      bare(name).toLowerCase().startsWith(typed),
     ),
   )
+}
+
+/**
+ * A command's name without the `/` this draws itself.
+ *
+ * The SDK documents `SlashCommand.name` as carrying no leading slash, and
+ * `classify` keeps whatever it was given rather than tidying it — a Frame is an
+ * observation. The tidying belongs here, where the slash is drawn, and it is
+ * done because getting it wrong is silent: a name that arrived as `/clear` is
+ * not a prefix of anything anyone types, so the menu would answer every
+ * keystroke with nothing at all rather than with a visible mistake.
+ */
+function bare(name: string): string {
+  return name.startsWith('/') ? name.slice(1) : name
 }
 
 /**
