@@ -155,15 +155,23 @@ export function replayTransport(options: ReplayOptions = {}): ReplayTransport {
  * has to name its handles literally.
  */
 const HELD = new Map<string, string>([
-  // A 1×1 red pixel and a 1×1 blue one — small enough to read, real enough to
-  // decode, and different enough that two pictures are visibly two.
+  // Two 200×112 screenshots of a window — a title bar, three dots and some
+  // lines of text — drawn in tokyo-night so they look like what the playground
+  // is drawing. The person's paste is blue, the agent's capture green, so two
+  // pictures are visibly two.
+  //
+  // Real ones, not the 1×1 pixels that were here first. A single pixel decodes
+  // and proves the lookup works, and shows nothing whatsoever about how a
+  // picture is laid out — which is exactly where the bug was: stretched by the
+  // column flex around it, a 1×1 fixture drew as an empty square the width of
+  // the Transcript, and looked like an image that had failed to load.
   [
     'img_replay_pasted',
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAABwCAIAAADUo6jRAAABZ0lEQVR42u3cMQqDQBBAUc+hbQi5gzfzOJ4kde4jaZNSRBSSUWTmwS+XFPKQcaPb3B69FF7jEggsgSWwNhrG9+5PRK1RCVhfCvMOXSOwwNIfsBYaVk1ErZE7ljuWwJKnQtnHksASWMoGq+3uUnhgCSyBJbBcBYGlTLBW/0vWD4EFFlhggQUWWGBJYAksgSWBJbAE1n7P11Q2gMACCyywwAJLhneBJbAksASWwJLOhlV5M6Ly5ghYYIElsMACy6QpsASWwJLAElgCy5aB1/3AAgsssMACCyzDu8ASWBJYAktgSdeA5QhagQUWWGCBBZYM7wJLYElgCSyBJfnE3muGYAkssMACCyzDuwzvElgCS2BJYMkn9rYGwBJYYIEFFliGdxneJbAElsCSwFIFWLYPBBZYYIEFFlgyvAssgSWBJbAElnQerHxH3zq0FyyBJbDAAsvwLk+FAksCS2AJLMkn9l73AwusFH0Ao3thFU7GploAAAAASUVORK5CYII=',
   ],
   [
     'img_replay_shot',
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC',
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAABwCAIAAADUo6jRAAABZ0lEQVR42u3cMQqDQBBAUc+hbQi5gzfyUJ4ldQpvkz4pRUQhGUVmHvxySSEPGTe6ze3RS+E1LoHAElgCa6NxGnZ/ImqNSsD6Uph36BqBBZb+gLXQsGoiao3csdyxBJY8Fco+lgSWwFI2WG13l8IDS2AJLIHlKggsZYK1+l+yfggssMACCyywwAJLAktgCSwJLIElsPZ7vt5lAwgssMACCyywZHgXWAJLAktgCSzpbFiVNyMqb46ABRZYAgsssEyaAktgCSwJLIElsGwZeN0PLLDAAgsssMAyvAssgSWBJbAElnQNWI6gFVhggQUWWGDJ8C6wBJYElsASWJJP7L1mCJbAAgsssMAyvMvwLoElsASWBJZ8Ym9rACyBBRZYYIFleJfhXQJLYAksCSxVgGX7QGCBBRZYYIElw7vAElgSWAJLYEnnwcp39K1De8ESWAILLLAM7/JUKLAksASWwJJ8Yu91P7DAStEHJv8i68ZkWKwAAAAASUVORK5CYII=',
   ],
 ])
 

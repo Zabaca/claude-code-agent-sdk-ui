@@ -1182,6 +1182,35 @@ test('a picture is described once, and one with no picture is still described', 
   view.unmount()
 })
 
+test('a picture is drawn at its own size, not stretched by the column around it', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'image', mediaType: 'image/png', handle: 'img_held' })
+  })
+
+  const picture = document.querySelector<HTMLImageElement>('[data-image] img')
+  const drawn = (picture?.className ?? '').split(/\s+/)
+
+  // happy-dom lays nothing out, so this asserts the rule rather than the
+  // pixels — but the rule is the whole bug. The picture sits in a column flex,
+  // whose `align-items` is `stretch`, and an `img` stretches under it like any
+  // other item: to the Transcript's full width, with `height: auto` following
+  // its aspect ratio. `max-w-full` does not save it, because nothing is over
+  // 100%.
+  //
+  // Breakage this fails on: dropping `self-start`, which is what shipped — a
+  // 200px screenshot blown up into a blurry wall, and the 1×1 replay fixture
+  // drawn as an empty square as tall as the Transcript is wide, which reads
+  // exactly like an image that failed to load.
+  expect(drawn).toContain('cc:self-start')
+  // And capped both ways, so a phone screenshot cannot take the whole column.
+  expect(drawn).toContain('cc:max-w-full')
+  expect(drawn.some((one) => one.startsWith('cc:max-h-'))).toBe(true)
+  view.unmount()
+})
+
 test('a picture the host would not hold is refused out loud, not dropped', async () => {
   const fake = fakeSse()
   const wire = recorder()

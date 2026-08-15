@@ -850,7 +850,15 @@ function Picture({ message, src }: { message: ImageMessage; src: (handle: string
         <img
           src={src(handle)}
           alt={describing(message)}
-          className="cc:max-w-full cc:rounded-sm"
+          // `self-start` is load-bearing: this sits in a column flex, whose
+          // `align-items` is `stretch`, and an `img` is stretched by it like
+          // anything else — to the full width of the Transcript, with `height:
+          // auto` then following its aspect ratio. A 200px screenshot is blown
+          // up to a blurry wall, and a 1×1 pixel becomes an empty square the
+          // height of the column. `max-w-full` cannot stop it: nothing is
+          // exceeding 100%. Capped in both directions so a phone screenshot
+          // cannot take the whole Transcript either.
+          className="cc:max-h-[24em] cc:max-w-full cc:self-start cc:rounded-sm"
           style={{ border: '1px solid var(--cc-rule)' }}
         />
       )}

@@ -421,6 +421,28 @@ test('replay resolves a handle it holds, and nothing at all for one it does not'
   }
 })
 
+test('what replay holds are pictures, not single pixels', () => {
+  // The playground exists to show the surface, and a 1×1 pixel shows nothing
+  // about how a picture is laid out. It was a 1×1 that made the stretched-image
+  // bug look like a broken image instead: blown up by the column flex, an empty
+  // square filled the Transcript, and a real screenshot in its place would have
+  // read as merely too big.
+  //
+  // Breakage this fails on: a fixture shrunk back to a pixel because it is
+  // shorter in the source.
+  const replay = replayTransport({ wait: immediately })
+  for (const handle of ['img_replay_pasted', 'img_replay_shot']) {
+    const src = replay.imageSrc(handle)
+    expect(src.startsWith('data:image/png;base64,')).toBe(true)
+    const bytes = Buffer.from(src.slice('data:image/png;base64,'.length), 'base64')
+    // IHDR is the first chunk of a PNG: width and height are the two big-endian
+    // uint32s at byte 16.
+    expect(bytes.subarray(1, 4).toString()).toBe('PNG')
+    expect(bytes.readUInt32BE(16)).toBeGreaterThan(64)
+    expect(bytes.readUInt32BE(20)).toBeGreaterThan(64)
+  }
+})
+
 /**
  * How many image entries of a provenance are on screen, drawn or not drawn —
  * "pasted with a picture" and "pasted without one" being different states that
