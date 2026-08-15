@@ -593,6 +593,35 @@ test('a pasted image travels with the prompt, ahead of the words about it', asyn
   ])
 })
 
+test('a picture sent with no words puts no empty text block on the wire', async () => {
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  await handler(
+    new Request(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'prompt',
+        text: '',
+        images: [{ mediaType: 'image/png', data: PIXEL }],
+      }),
+    }),
+  )
+  await settle()
+
+  // A screenshot with no words is a whole prompt. What it must not carry is an
+  // empty text block, which is a content block saying nothing and is the kind
+  // of thing an API rejects the whole request over.
+  //
+  // Breakage this fails on: appending `{ type: 'text', text: '' }`
+  // unconditionally, which turns "look at this" into a Turn that never starts
+  // and reports its failure as something about the model.
+  expect(fake.prompts[0]?.message.content).toEqual([
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PIXEL } },
+  ])
+})
+
 test('a prompt with no images still travels as plain words', async () => {
   const fake = fakeQuery()
   const handler = createAgentHandler({ createQuery: fake.createQuery })

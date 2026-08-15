@@ -63,7 +63,10 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
 
   const send = useCallback(
     (text: string, images: PromptImage[] = []): void => {
-      if (text.trim() === '') return
+      // Whitespace alone starts no Turn — but a picture is not whitespace. A
+      // screenshot with no words is a whole prompt, and the guard that exists
+      // to stop an empty composer willing a Turn must not eat one.
+      if (text.trim() === '' && images.length === 0) return
       // Shown before the handler has said anything, and identified so that the
       // Frame for these exact words takes this Message's place rather than
       // being added beside it.

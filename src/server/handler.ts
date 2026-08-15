@@ -295,7 +295,10 @@ class AgentSession {
                 source: { type: 'base64', media_type: image.mediaType, data: image.data },
               }),
             ),
-            { type: 'text', text },
+            // A picture with no words is a whole prompt; an empty text block
+            // beside it is a content block saying nothing, which is the kind
+            // of thing an API rejects the whole request over.
+            ...(text.trim() === '' ? [] : [{ type: 'text' as const, text }]),
           ]
     input.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null })
   }

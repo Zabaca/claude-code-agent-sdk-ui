@@ -1110,6 +1110,43 @@ test('what is pasted is visible before it is sent, and can be taken back', async
   view.unmount()
 })
 
+test('a screenshot with no words still starts a Turn, and is never silently dropped', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await paste(png('one'))
+  await enter()
+
+  // "Look at this" is a whole prompt when the picture is the prompt, and the
+  // composer must not swallow it.
+  //
+  // Breakage this fails on — and it is the silent one, which is why it is
+  // here: `send` guards on whitespace, so a Turn carrying a picture and no
+  // words wills nothing, while the composer clears the tray on submit anyway.
+  // The screenshot vanishes, no Turn starts, and nothing on screen says why.
+  expect(wire.posted).toEqual([
+    { body: { type: 'prompt', text: '', images: [{ mediaType: 'image/png', data: base64('one') }] } },
+  ])
+  expect(attached()).toEqual([])
+  view.unmount()
+})
+
+test('whitespace with nothing attached still wills nothing', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await type('   ')
+  await enter()
+
+  // The other arm. Loosening the guard so a picture can travel must not
+  // loosen it for an empty composer, which is what "whitespace alone starts
+  // no Turn" has always meant.
+  expect(wire.posted).toEqual([])
+  view.unmount()
+})
+
 test('pasting words is still pasting words', async () => {
   const fake = fakeSse()
   const wire = recorder()
