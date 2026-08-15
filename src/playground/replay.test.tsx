@@ -197,9 +197,9 @@ test('the opening log plays every divergence, and each reaches the screen', asyn
   // the agent can see has changed. A playground that played none of them would
   // demonstrate the screen at its most convincing and least honest.
   expect(marks()).toEqual(['recall', 'hook', 'compacted', 'reset'])
-  // And a Turn that died, beside the three that did not — the last of which
-  // is the Thread case appended after the divergences.
-  expect(outcomes()).toEqual(['settled', 'failed', 'settled', 'settled'])
+  // And a Turn that died, beside the ones that did not — the pictures case
+  // and the Thread case both appended their own after the divergences.
+  expect(outcomes()).toEqual(['settled', 'failed', 'settled', 'settled', 'settled'])
 
   const said = screen.getByRole('log').textContent ?? ''
   expect(said).toContain('180,000')
@@ -355,6 +355,83 @@ function outcomes(): (string | undefined)[] {
   )
 }
 
+test('the replay log has pictures in it, held and unheld, and neither names a location', async () => {
+  const replay = replayTransport({ wait: immediately })
+  const view = await mount(replay)
+  await drain(replay)
+
+  // All three states, counted exactly, and each identified by which one it is.
+  //
+  // The first draft of this asserted `>= 2` pictures and `>= 1` with an image
+  // in it, and stayed green when the *pasted* screenshot was deleted from the
+  // script — the agent's one and the unheld one satisfied both thresholds. A
+  // loose count is how a demo quietly loses half of what it is demonstrating,
+  // so each state is named and counted on its own.
+  //
+  // Breakage each of these fails on: dropping the pasted screenshot, dropping
+  // the one the agent captured, or dropping the one the host could not hold —
+  // the last of which is what makes the other two legible as *held* rather
+  // than as the only thing the surface can do.
+  expect(shownAs('pasted', { drawn: true })).toBe(1)
+  expect(shownAs('shown', { drawn: true })).toBe(1)
+  expect(shownAs('pasted', { drawn: false })).toBe(1)
+  expect(document.querySelectorAll('[data-image]').length).toBe(3)
+  expect(
+    [...document.querySelectorAll('[data-image]')].filter((one) =>
+      (one.textContent ?? '').includes('not held'),
+    ).length,
+  ).toBe(1)
+
+  // The Frames replay retains are the Frames the handler retains: a handle,
+  // and never a payload or a location. A replay log that carried bytes would
+  // be a fixture of a wire format the handler does not produce.
+  const pictures = replay.log.filter((frame) => frame.kind === 'image')
+  expect(pictures.length).toBe(3)
+  for (const picture of pictures) {
+    expect(picture).not.toHaveProperty('data')
+    expect(picture).not.toHaveProperty('url')
+  }
+
+  // And every picture on screen is drawn with alt text, which is required.
+  for (const picture of document.querySelectorAll<HTMLImageElement>('[data-image] img')) {
+    expect(picture.alt).not.toBe('')
+  }
+  view.unmount()
+})
+
+test('replay resolves a handle it holds, and nothing at all for one it does not', async () => {
+  const replay = replayTransport({ wait: immediately })
+
+  // The same both-cases-one-screen shape the handler is held to. Replay holds
+  // its own fixtures rather than reaching for a host — but it resolves them
+  // the same way the host does, by lookup, so a handle nobody put there gets
+  // nothing back.
+  //
+  // Breakage this fails on: a resolver that builds a URL out of whatever it is
+  // handed, which is how a `../` would get somewhere in replay even though it
+  // cannot in live.
+  const held = OPENING.flatMap((beat) =>
+    beat.frame?.kind === 'image' && beat.frame.handle !== undefined ? [beat.frame.handle] : [],
+  )
+  expect(held.length).toBeGreaterThanOrEqual(1)
+  const handle = held[0] ?? ''
+  expect(replay.imageSrc(handle)).not.toBe('')
+  for (const wrong of ['../../etc/passwd', 'img_nobody_minted', '']) {
+    expect(replay.imageSrc(wrong)).toBe('')
+  }
+})
+
+/**
+ * How many image entries of a provenance are on screen, drawn or not drawn —
+ * "pasted with a picture" and "pasted without one" being different states that
+ * a bare count of either would let stand in for the other.
+ */
+function shownAs(provenance: 'pasted' | 'shown', { drawn }: { drawn: boolean }): number {
+  return [...document.querySelectorAll(`[data-image="${provenance}"]`)].filter(
+    (one) => (one.querySelector('img') !== null) === drawn,
+  ).length
+}
+
 /** No waiting at all, so a whole script lands in microtasks and uses no timer. */
 function immediately(): Promise<void> {
   return Promise.resolve()
@@ -385,6 +462,7 @@ async function mount(replay: ReplayTransport): Promise<{ unmount(): void }> {
       endpoint: 'replay',
       createEventSource: replay.createEventSource,
       fetch: replay.fetch,
+      imageSrc: replay.imageSrc,
     })
     return <ClaudeSession session={session} />
   }

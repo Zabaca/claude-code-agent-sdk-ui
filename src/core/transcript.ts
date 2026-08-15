@@ -163,14 +163,23 @@ export type ToolCallMessage = {
 /** `pending` until the tool answers; then whether it answered or failed. */
 export type ToolStatus = 'pending' | 'success' | 'error'
 
-/** An image in the Transcript — pasted by a person, or shown by the agent. */
+/**
+ * An image in the Transcript — pasted by a person, or shown by the agent.
+ *
+ * A viewer draws it from `handle` alone. `data` and `url` are only ever present
+ * on a Transcript reduced from a log that never left the host — the pure path,
+ * the golden fixture — because the handler substitutes a handle for both before
+ * anything reaches a browser.
+ */
 export type ImageMessage = {
   kind: 'image'
   mediaType?: string
-  /** Base64 payload, when the image arrived inline. */
+  /** Base64 payload, when the image arrived inline. Never leaves the host. */
   data?: string
-  /** Location, when the image arrived by reference. */
+  /** Location, when the image arrived by reference. Never leaves the host. */
   url?: string
+  /** What the host minted to name the held bytes. What a viewer draws from. */
+  handle?: string
   /** The tool call that produced it, when the agent showed it. */
   toolCallId?: string
   thread?: string

@@ -13,8 +13,25 @@
  */
 export type AgentEvent = PromptEvent | InterruptEvent
 
-/** A person's words, willed into a Turn. */
-export type PromptEvent = { type: 'prompt'; text: string }
+/**
+ * A person's words, willed into a Turn — and the pictures they pasted in with
+ * them, which travel ahead of the words because a picture before the words
+ * about it reads better to the model.
+ *
+ * The images are payloads rather than handles, and that is the one direction
+ * the handle rule does not run in: a handle is something the **host** minted,
+ * so a person handing over a screenshot has none to name yet. What comes back
+ * down carries handles only.
+ */
+export type PromptEvent = { type: 'prompt'; text: string; images?: PromptImage[] }
+
+/** A picture pasted into the composer, as it travels to the host. */
+export type PromptImage = {
+  /** Must be an image type the host will hold; anything else is refused. */
+  mediaType: string
+  /** Base64, without the `data:` prefix — this is a payload, not a URI. */
+  data: string
+}
 
 /** Stop the Turn now running. A stop asked for is not a failure. */
 export type InterruptEvent = { type: 'interrupt' }

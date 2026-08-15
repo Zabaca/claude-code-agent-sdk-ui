@@ -161,6 +161,7 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
             mediaType: frame.mediaType,
             data: frame.data,
             url: frame.url,
+            handle: frame.handle,
             toolCallId: frame.toolCallId,
             thread: frame.thread,
           }),

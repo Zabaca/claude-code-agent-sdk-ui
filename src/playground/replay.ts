@@ -45,6 +45,11 @@ export type ReplayTransport = {
   createEventSource: AgentEventSourceFactory
   /** For `useAgentSession({ fetch })` — where a willed Event arrives. */
   fetch: AgentFetch
+  /**
+   * For `useAgentSession({ imageSrc })` — where a held picture comes from when
+   * there is no host holding it. See {@link HELD}.
+   */
+  imageSrc: (handle: string) => string
   /** The retained log, as the handler keeps it. Index is the `id:`. */
   log: Frame[]
   /** Resolves once nothing is being played. */
@@ -133,7 +138,42 @@ export function replayTransport(options: ReplayOptions = {}): ReplayTransport {
     return { ok: false, status: 400 }
   }
 
-  return { createEventSource, fetch, log, quiet: () => playing }
+  return { createEventSource, fetch, imageSrc, log, quiet: () => playing }
+}
+
+/**
+ * The pictures replay is holding, under the handles its script names.
+ *
+ * Live mode has a host holding bytes and serving them at `?image=<handle>`;
+ * replay has no host, so it holds its own. What is *not* different is the rule:
+ * a Message names a handle and only a handle, and turning one into something a
+ * browser can fetch is a **lookup**. A handle nobody put here gets nothing
+ * back, exactly as it does from the handler — which is why this is a `Map` and
+ * not a template string.
+ *
+ * Fixtures rather than mints, because the script is a module-level constant and
+ * has to name its handles literally.
+ */
+const HELD = new Map<string, string>([
+  // A 1×1 red pixel and a 1×1 blue one — small enough to read, real enough to
+  // decode, and different enough that two pictures are visibly two.
+  [
+    'img_replay_pasted',
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  ],
+  [
+    'img_replay_shot',
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC',
+  ],
+])
+
+/**
+ * Replay's half of `imageSrc`. A lookup, and an empty string for anything it is
+ * not holding — the same "nothing" the handler answers with, so the both-cases
+ * property holds on this path too and a `../` gets no further here than there.
+ */
+function imageSrc(handle: string): string {
+  return HELD.get(handle) ?? ''
 }
 
 function parse(body: string): { type?: string; text?: unknown } | undefined {
@@ -648,6 +688,42 @@ export const OPENING: Beat[] = [
       terminalReason: 'max_turns',
     },
   },
+  // --- pictures, both ways ------------------------------------------------------
+
+  // A screenshot pasted in, ahead of the words about it — which is the order
+  // it was sent in and the order the model read it in.
+  {
+    after: 700,
+    frame: { kind: 'image', mediaType: 'image/png', handle: 'img_replay_pasted' },
+  },
+  { frame: { kind: 'prompt', text: 'this button is clipped — see the screenshot' } },
+  ...prose('I can see it. Let me capture the same view after the fix.', { block: 7 }),
+  ...tool({
+    id: 'toolu_shot',
+    name: 'Screenshot',
+    input: { url: 'http://localhost:5173/' },
+    output: 'Captured 1 image.',
+    takes: 600,
+  }),
+  // And one the agent put there itself, attributed to the call that produced
+  // it. The Transcript shows the screenshot rather than a sentence about one,
+  // which is the whole of the second half of this feature.
+  {
+    frame: {
+      kind: 'image',
+      mediaType: 'image/png',
+      handle: 'img_replay_shot',
+      toolCallId: 'toolu_shot',
+    },
+  },
+  // A picture the host could not hold — the SDK gave a location for this one
+  // and nothing else, so there are no bytes to mint against and no location to
+  // pass on. Played because the marker without a picture is a real state, and
+  // because it is the only thing that makes the two above legible as *held*.
+  { frame: { kind: 'image', mediaType: 'image/png' } },
+  ...prose('Same clipping. It is the fixed width, not the font.', { block: 8 }),
+  { frame: { kind: 'settled', result: 'Found it: the fixed width.', turns: 1 } },
+
   // Memory gone rather than summarised — the harder loss, and the one that
   // must not read like the compaction two lines above it.
   { after: 700, frame: { kind: 'reset', transcriptId: 'conv-2' } },

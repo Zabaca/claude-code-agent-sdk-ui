@@ -965,7 +965,372 @@ test('a runtime that advertises nothing offers nothing', async () => {
   view.unmount()
 })
 
+test('an image is drawn from its handle, and says who put it there', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'image', mediaType: 'image/png', handle: 'img_pasted' })
+    fake.frame({ kind: 'prompt', text: 'why is this button clipped' })
+    fake.frame({
+      kind: 'image',
+      mediaType: 'image/png',
+      handle: 'img_shown',
+      toolCallId: 'toolu_shot',
+    })
+  })
+
+  const [pasted, shown] = pictures()
+
+  // Drawn from the handle and from nothing else. A `src` that were a data URI
+  // or a path would mean the Message had named a location, which is the thing
+  // the whole handle discipline exists to prevent.
+  //
+  // Nothing here passes `imageSrc`, so this is the hook's own default and the
+  // shape the handler actually serves: the handle as a query parameter against
+  // this Session's endpoint. Pinned rather than left incidental, because the
+  // option added for replay must not change what every other caller gets.
+  expect(pasted?.src).toBe(`${endpoint}?image=img_pasted`)
+  expect(pasted?.src).toContain('img_pasted')
+  expect(shown?.src).toContain('img_shown')
+  for (const picture of pictures()) {
+    expect(picture.src).not.toContain('data:')
+    expect(picture.src).not.toContain('..')
+  }
+
+  // Alt text is required, and the two are not the same sentence: a picture the
+  // person pasted and one the agent captured are different facts about the
+  // conversation, and a reader who cannot see either must still be able to
+  // tell them apart.
+  //
+  // Breakage this fails on: the `image` case still drawing `Undrawn`, or an
+  // `<img>` with no alt — a picture that is silent to exactly the reader who
+  // most needs it described.
+  expect(pasted?.alt).not.toBe('')
+  expect(shown?.alt).not.toBe('')
+  expect(pasted?.alt).not.toBe(shown?.alt)
+  expect(shown?.alt).toContain('toolu_shot')
+
+  // And the Transcript keeps the order the Frames arrived in: the picture is
+  // ahead of the words about it, which is where it was sent.
+  const rows = [...screen.getByRole('log').children]
+  expect(rows.findIndex((row) => row.querySelector('img'))).toBe(0)
+  view.unmount()
+})
+
+test('an image the host is not holding draws its marker and fetches nothing', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'image', mediaType: 'image/png', handle: 'img_held' })
+    // The shape the handler retains for an image it could not mint against —
+    // one the SDK gave only a location for, or a payload that was not an
+    // image. It arrived, so it is in the Transcript; it is not held, so there
+    // is nothing to draw.
+    fake.frame({ kind: 'image', mediaType: 'image/png' })
+  })
+
+  // Both through the one screen, and exactly one result. "An image with no
+  // handle draws no picture" passes just as well when the whole case is
+  // missing, so the held one is driven alongside it: two markers, one picture.
+  //
+  // Breakage this fails on: building a `src` from an absent handle, which is
+  // `?image=undefined` — a request the browser really makes, to a handle
+  // nobody minted, from a screen that will show a broken image either way.
+  expect(shownImages()).toHaveLength(2)
+  expect(pictures()).toHaveLength(1)
+  expect(shownImages()[1]).toContain('not held')
+  view.unmount()
+})
+
+test('a pasted screenshot travels with the prompt, ahead of the words about it', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  const wentThrough = await paste(png('one'), png('two'))
+  // Taken by the composer rather than left to the browser, which would
+  // otherwise insert the file's *name* into the words as well.
+  expect(wentThrough).toBe(false)
+
+  await type('why is this button clipped')
+  await enter()
+
+  // Both pictures, in the order they were pasted, ahead of the text — and the
+  // text unchanged, because a paste must not rewrite what was typed.
+  //
+  // Breakage this fails on: the paste being ignored altogether, which is the
+  // silent one — the Turn runs, the agent answers, and it answers about a
+  // picture it never received.
+  expect(wire.posted).toEqual([
+    {
+      body: {
+        type: 'prompt',
+        text: 'why is this button clipped',
+        images: [
+          { mediaType: 'image/png', data: base64('one') },
+          { mediaType: 'image/png', data: base64('two') },
+        ],
+      },
+    },
+  ])
+  // And the composer is empty of both, so the next Turn does not resend them.
+  expect(composer().value).toBe('')
+  expect(attached()).toEqual([])
+  view.unmount()
+})
+
+test('what is pasted is visible before it is sent, and can be taken back', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await paste(png('one'), png('two'))
+
+  // A paste that vanished into a variable is a paste the person cannot check,
+  // cannot count and cannot undo. Two of them, told apart.
+  expect(attached()).toHaveLength(2)
+
+  await act(async () => attachment(0).click())
+  expect(attached()).toHaveLength(1)
+
+  await type('just this one')
+  await enter()
+
+  expect(wire.posted).toEqual([
+    {
+      body: {
+        type: 'prompt',
+        text: 'just this one',
+        images: [{ mediaType: 'image/png', data: base64('two') }],
+      },
+    },
+  ])
+  view.unmount()
+})
+
+test('a screenshot with no words still starts a Turn, and is never silently dropped', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await paste(png('one'))
+  await enter()
+
+  // "Look at this" is a whole prompt when the picture is the prompt, and the
+  // composer must not swallow it.
+  //
+  // Breakage this fails on — and it is the silent one, which is why it is
+  // here: `send` guards on whitespace, so a Turn carrying a picture and no
+  // words wills nothing, while the composer clears the tray on submit anyway.
+  // The screenshot vanishes, no Turn starts, and nothing on screen says why.
+  expect(wire.posted).toEqual([
+    { body: { type: 'prompt', text: '', images: [{ mediaType: 'image/png', data: base64('one') }] } },
+  ])
+  expect(attached()).toEqual([])
+  view.unmount()
+})
+
+test('whitespace with nothing attached still wills nothing', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await type('   ')
+  await enter()
+
+  // The other arm. Loosening the guard so a picture can travel must not
+  // loosen it for an empty composer, which is what "whitespace alone starts
+  // no Turn" has always meant.
+  expect(wire.posted).toEqual([])
+  view.unmount()
+})
+
+test('a picture is described once, and one with no picture is still described', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'image', mediaType: 'image/png', handle: 'img_held' })
+    fake.frame({ kind: 'image', mediaType: 'image/png' })
+  })
+
+  const [held, unheld] = [...document.querySelectorAll('[data-image]')]
+
+  // The caption is verbatim the picture's alt, so a reader who hears both
+  // hears the same sentence twice. The alt is what carries it — it is required
+  // and it is on the picture itself — so the caption beside it is decoration.
+  const heldCaption = held?.querySelector('[data-caption]')
+  const unheldCaption = unheld?.querySelector('[data-caption]')
+  expect(held?.querySelector('img')?.alt).toBe(heldCaption?.textContent?.trim().replace('▣ ', ''))
+  expect(held?.querySelector('img')?.alt).not.toBe('')
+  expect(heldCaption?.getAttribute('aria-hidden')).toBe('true')
+
+  // But only where there *is* a picture to carry it. Hiding the caption
+  // unconditionally would leave the unheld case with no accessible text at
+  // all — silencing the very entry that exists to say something arrived that
+  // cannot be shown.
+  //
+  // Breakage this fails on: `aria-hidden` on the caption without the
+  // condition, which reads as tidier and makes half the states mute.
+  expect(unheld?.querySelector('img')).toBe(null)
+  // Either absent or an explicit "false" — both mean audible; only "true"
+  // would silence it, which is the one thing this is asserting against.
+  expect(unheldCaption?.getAttribute('aria-hidden')).not.toBe('true')
+  expect(unheldCaption?.textContent ?? '').toContain('not held')
+  view.unmount()
+})
+
+test('a picture the host would not hold is refused out loud, not dropped', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await paste(svg('diagram'))
+
+  // Refusing an SVG is right — it is script-capable, and holding one would
+  // mean serving a script from the Session's own origin. Saying nothing about
+  // it is not: the person watches a paste do nothing at all and concludes the
+  // paste did not register, rather than that it was turned down.
+  //
+  // Breakage this fails on: filtering the clipboard down to what is holdable
+  // and letting an empty result fall through as if nothing had been pasted.
+  expect(attached()).toEqual([])
+  expect(refusal()).toContain('image/svg+xml')
+
+  // And it stays refused rather than quietly travelling anyway.
+  await type('what is wrong with this')
+  await enter()
+  expect(wire.posted).toEqual([{ body: { type: 'prompt', text: 'what is wrong with this' } }])
+  view.unmount()
+})
+
+test('a refusal goes away when a picture the host will hold arrives', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await paste(svg('diagram'))
+  expect(refusal()).not.toBe('')
+
+  await paste(png('one'))
+
+  // The other arm, through the same screen. A refusal left standing over a
+  // paste that worked would say the screenshot in the tray had been turned
+  // down — which is the same lie in the opposite direction, and "no refusal
+  // is shown" alone cannot tell a cleared message from one never written.
+  expect(refusal()).toBe('')
+  expect(attached()).toHaveLength(1)
+  view.unmount()
+})
+
+test('pasting words is still pasting words', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  const wentThrough = await pasteText('a stack trace')
+  await type('what does this mean')
+  await enter()
+
+  // Breakage this fails on: a paste handler that calls `preventDefault` on
+  // everything, so pasting a stack trace into the composer quietly stops
+  // working the day images land — a regression nothing else here would catch,
+  // and one no assertion about state could see, because the composer's own
+  // insertion is the browser's default action rather than anything React does.
+  expect(wentThrough).toBe(true)
+  expect(attached()).toEqual([])
+  expect(wire.posted).toEqual([
+    { body: { type: 'prompt', text: 'what does this mean' } },
+  ])
+  view.unmount()
+})
+
+test('a prompt with no pictures carries no `images` field at all', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await type('just words')
+  await enter()
+
+  // The other arm of the predicate. An always-present `images: []` would pass
+  // every test above while changing what an ordinary Turn puts on the wire.
+  expect(wire.posted).toEqual([{ body: { type: 'prompt', text: 'just words' } }])
+  view.unmount()
+})
+
 // --- driving the seam ---------------------------------------------------------
+
+/** What each image entry says, in Transcript order — picture or no picture. */
+function shownImages(): string[] {
+  return [...document.querySelectorAll('[data-image]')].map((one) => (one.textContent ?? '').trim())
+}
+
+/** Every picture on screen, in Transcript order. */
+function pictures(): HTMLImageElement[] {
+  return [...document.querySelectorAll<HTMLImageElement>('[data-image] img')]
+}
+
+/** An SVG — an image to the clipboard, and a script to a browser. */
+function svg(body: string): File {
+  return new File([body], `${body}.svg`, { type: 'image/svg+xml' })
+}
+
+/** What the composer says about a paste it turned down. */
+function refusal(): string {
+  return (document.querySelector('[data-paste-refused]')?.textContent ?? '').trim()
+}
+
+/** A PNG whose bytes say which one it is, so two pastes are told apart. */
+function png(body: string): File {
+  return new File([body], `${body}.png`, { type: 'image/png' })
+}
+
+function base64(body: string): string {
+  return btoa(body)
+}
+
+/**
+ * Pasting pictures: what the clipboard hands a composer after a screenshot.
+ * Reports whether the default action survived — `fireEvent` returns false when
+ * something called `preventDefault`, which is the only way to see that the
+ * browser's own insertion was spoken for.
+ */
+async function paste(...files: File[]): Promise<boolean> {
+  let wentThrough = true
+  await act(async () => {
+    wentThrough = fireEvent.paste(composer(), { clipboardData: { files, items: [] } })
+    // Reading a File is asynchronous, as it is in a browser.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  return wentThrough
+}
+
+/** Pasting words, which is what a composer's paste has always been for. */
+async function pasteText(text: string): Promise<boolean> {
+  let wentThrough = true
+  await act(async () => {
+    wentThrough = fireEvent.paste(composer(), {
+      clipboardData: { files: [], items: [], getData: () => text },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  return wentThrough
+}
+
+/** What the composer says it is about to send with the words. */
+function attached(): string[] {
+  return [...document.querySelectorAll('[data-attachment]')].map((one) =>
+    (one.textContent ?? '').trim(),
+  )
+}
+
+function attachment(at: number): HTMLElement {
+  const found = document.querySelectorAll<HTMLElement>('[data-attachment] button')[at]
+  if (!found) throw new Error(`no attachment at ${at}`)
+  return found
+}
 
 /** What a runtime advertises, described — the shape `supportedCommands()` gives. */
 const COMMANDS = [
