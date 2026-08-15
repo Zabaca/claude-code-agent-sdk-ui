@@ -124,9 +124,6 @@ class AgentSession {
   #sessionId: string | undefined
   #turnOpen = false
   #interrupting = false
-  /** A `supportedCommands()` in flight. Started at `init`, awaited nowhere near
-   * the message loop — see {@link AgentSession.describe}. */
-  #describing: Promise<void> | undefined
 
   constructor(options: AgentHandlerOptions) {
     this.#options = options
@@ -277,13 +274,20 @@ class AgentSession {
         this.#query = undefined
         this.#input = undefined
       }
-      // Awaited here — after the stream has closed — and deliberately nowhere
-      // else, so that the observation task never finishes while the runtime
-      // still owes it an answer. Cleared first, so a description outstanding
-      // when the stream closed cannot be waited on twice.
-      const describing = this.#describing
-      this.#describing = undefined
-      await describing
+      // A `supportedCommands()` still outstanding is deliberately not awaited
+      // here. It looked like it belonged — "started at init, awaited after the
+      // stream closes" — but nothing awaits this task: `#host` calls it as
+      // `void this.#observe(query)`, and `#describe` swallows its own errors,
+      // so awaiting here could not be observed by anything and could not
+      // surface a rejection either. Code that exists to satisfy a phrase is
+      // code nothing can hold to account.
+      //
+      // The half of that phrase with teeth is the other one: the await must
+      // never happen *inside* the loop above, because the reply travels on the
+      // stream the loop is pulling. `describing the commands never stops
+      // messages being pulled` is what enforces it — move the await into the
+      // loop and it stops passing and starts hanging, which is why it is raced
+      // against a clock.
     }
   }
 
@@ -309,7 +313,9 @@ class AgentSession {
    * so awaiting it from inside the message loop stops the loop pulling — and
    * the thing it is waiting for is behind the messages it has stopped pulling.
    * The handler then waits forever for something only it could have delivered.
-   * Started here, resolved on its own, awaited only once the stream has closed.
+   * Started here, resolved on its own, and awaited nowhere: the Frame it lands
+   * is appended when the answer arrives, so there is nothing left for anyone to
+   * wait on. See the `finally` in `#observe` for why not even teardown does.
    *
    * `init` already advertised the bare names, so what this adds is the
    * descriptions, argument hints and aliases — which is why a failure here is
@@ -322,7 +328,7 @@ class AgentSession {
     const ask = query?.supportedCommands
     if (!query || !ask) return
 
-    this.#describing = (async () => {
+    void (async () => {
       try {
         const described = commandsIn(await ask.call(query))
         // REPLACE semantics reach the Transcript, so an empty answer retained
