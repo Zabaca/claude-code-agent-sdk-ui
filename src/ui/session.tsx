@@ -303,6 +303,13 @@ export function ClaudeSession({
           // a control that lies. It stays unset until such an Event exists.
         />
       </div>
+
+      {/* The end of everything, watched rather than measured — empty, and
+          aria-hidden, because it is a position and not something anyone reads.
+          After the composer rather than after the Transcript: following brings
+          this into view, and a marker above the composer would scroll the
+          composer off the bottom of the screen to do it. */}
+      <div ref={tail.sentinel} aria-hidden className="cc:h-px cc:shrink-0" />
     </div>
   )
 }
