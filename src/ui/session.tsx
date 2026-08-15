@@ -681,12 +681,6 @@ function Undrawn({ kind }: { kind: Message['kind'] }) {
 }
 
 /**
- * A tool call, drawn from the moment it starts. `status` is passed through
- * rather than defaulted, because `ClaudeToolCall` defaults to `success` and a
- * call still in flight drawn as a success is the screen saying the tool
- * answered when it has not.
- */
-/**
  * The `⏺` glyph's colour, by how the call went — the same three `ClaudeToolCall`
  * uses, restated because a call drawn as something other than a collapsed line
  * still has to say whether it has answered.
@@ -697,6 +691,15 @@ const STATUS_TONE: Record<ToolStatus, string> = {
   pending: 'var(--cc-pending)',
 }
 
+/**
+ * A tool call, drawn from the moment it starts.
+ *
+ * A call that says what it did is drawn as what it did — a file edit is its
+ * diff, the agent's plan is its list — and everything else is the collapsed
+ * line. `status` is passed through rather than defaulted, because
+ * `ClaudeToolCall` defaults to `success` and a call still in flight drawn as a
+ * success is the screen saying the tool answered when it has not.
+ */
 function ToolCall({ message }: { message: ToolCallMessage }) {
   // A file edit says what it changed, so it is drawn as what it changed. The
   // patch is the SDK's own — see `tool-output.ts`, which is also where the
