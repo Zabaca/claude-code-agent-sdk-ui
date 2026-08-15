@@ -45,6 +45,15 @@ export type Arranged = {
   /** Index in the Transcript, which is a stable key for as long as it is drawn. */
   at: number
   message: Message
+  /**
+   * The Thread this Message belongs to; absent for the agent's own work.
+   * Carried rather than left to be worked out again: placing a Message needs
+   * this, so every consumer that re-derived it was repeating a decision that
+   * had already been made.
+   */
+  thread?: string
+  /** The Thread this Message opens, when it is the `Task` call that opened one. */
+  opens?: string
   /** The Thread's Messages, on the `Task` call that opened them. */
   nested?: Arranged[]
 }
@@ -58,13 +67,25 @@ export type Arranged = {
  * them to a parent that is not there.
  */
 export function arrange(messages: readonly Message[], display: ThreadDisplay): Arranged[] {
-  if (display === 'inline') return messages.map((message, at) => ({ at, message }))
+  /** One Message with what was worked out about it, and nothing undefined. */
+  const placed = (at: number, message: Message, nested?: Arranged[]): Arranged => {
+    const thread = threadOf(message)
+    const opens = opensOf(message)
+    return {
+      at,
+      message,
+      ...(thread === undefined ? {} : { thread }),
+      ...(opens === undefined ? {} : { opens }),
+      ...(nested === undefined ? {} : { nested }),
+    }
+  }
 
-  const opened = new Set(
-    messages.flatMap((message) =>
-      message.kind === 'tool-call' && message.opens ? [message.opens.thread] : [],
-    ),
-  )
+  if (display === 'inline') return messages.map((message, at) => placed(at, message))
+
+  const opened = new Set(messages.flatMap((message) => {
+    const opens = opensOf(message)
+    return opens === undefined ? [] : [opens]
+  }))
   const out: Arranged[] = []
   const under = new Map<string, Arranged[]>()
 
@@ -75,21 +96,26 @@ export function arrange(messages: readonly Message[], display: ThreadDisplay): A
     if (thread !== undefined && opened.has(thread)) {
       if (display === 'hidden') continue
       const nested = under.get(thread) ?? []
-      nested.push({ at, message })
+      nested.push(placed(at, message))
       under.set(thread, nested)
       continue
     }
-    const opens = message.kind === 'tool-call' ? message.opens?.thread : undefined
+    const opens = opensOf(message)
     if (display === 'nested' && opens !== undefined) {
       const nested: Arranged[] = under.get(opens) ?? []
       under.set(opens, nested)
-      out.push({ at, message, nested })
+      out.push(placed(at, message, nested))
       continue
     }
-    out.push({ at, message })
+    out.push(placed(at, message))
   }
 
   return out
+}
+
+/** The Thread a `Task` call opened, for the one Message kind that opens one. */
+function opensOf(message: Message): string | undefined {
+  return message.kind === 'tool-call' ? message.opens?.thread : undefined
 }
 
 /** The Thread a Message belongs to, for the kinds that can belong to one. */

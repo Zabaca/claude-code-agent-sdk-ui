@@ -65,6 +65,32 @@ describe('placing a Thread’s Messages', () => {
     expect(arranged.every((one) => one.nested === undefined)).toBe(true)
   })
 
+  test('says which Thread each entry belongs to, and which one it opens', () => {
+    // arrange already works both out to decide where a Message goes, and used
+    // to drop them — so every consumer computed them again, per entry, per
+    // render, from the Message it had just been handed.
+    const arranged = arrange(MESSAGES, 'inline')
+
+    expect(arranged.map((one) => one.thread)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      'call-1',
+      'call-1',
+      'call-2',
+      undefined,
+    ])
+    expect(arranged.map((one) => one.opens)).toEqual([
+      undefined,
+      'call-1',
+      'call-2',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ])
+  })
+
   test('keeps a Thread nobody on screen opened in Transcript order', () => {
     // A log truncated before the `Task` call, or resumed after it. The Thread
     // is real and its Messages are on the wire, but there is no parent here to

@@ -29,7 +29,6 @@ import { cn } from './lib/cn.ts'
 import {
   arrange,
   hueOf,
-  threadOf,
   ThreadMeters,
   ThreadTag,
   useThreads,
@@ -658,8 +657,10 @@ function Attributed({
   children: React.ReactNode
 }) {
   const message = entry.message
-  const thread = threadOf(message)
-  const opens = message.kind === 'tool-call' ? message.opens?.thread : undefined
+  // Read off the entry rather than worked out again: `arrange` decided both of
+  // these in order to place this Message, and re-deriving them per entry per
+  // render was the same decision made a second time, in a second place.
+  const { thread, opens } = entry
   const reading = threads.get(thread ?? opens ?? '')
   const tool = message.kind === 'tool-call' ? message.name : undefined
 
