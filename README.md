@@ -83,6 +83,15 @@ They are one code path: the same `useAgentSession`, the same `reduce`, the same
 components. Only where the Frames come from differs — which is why replay
 proves something about live.
 
+> **If an edit does not show up, restart `bun run dev`.** The dev server
+> rebundles on change and the stylesheet is rebuilt whenever a component is
+> newer than it — but a long-lived `--hot` process can lose track of a file that
+> was *replaced* rather than written in place (which is what `perl -i`, `cp` and
+> some editors' atomic saves do). The page then keeps serving the last good
+> bundle, which looks exactly like a change that did not work. `curl -s
+> localhost:5173 | grep -o '/_bun/client/[^"]*'` and grepping that bundle for
+> your change settles it in a second.
+
 ## Entry points
 
 Four, plus the stylesheet. Each is importable on its own.
