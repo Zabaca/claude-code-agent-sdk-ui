@@ -1,7 +1,8 @@
 import { act, renderHook } from '@testing-library/react'
 import { expect, test } from 'bun:test'
-import { dirname, relative, resolve } from 'node:path'
+import { relative } from 'node:path'
 
+import { reachableFrom } from '../../test/imports.ts'
 import { fakeSse, type FakeSse } from './fake.ts'
 import {
   useAgentSession,
@@ -681,23 +682,20 @@ test('cost, harness, hook output and an unprompted cause are all reachable as da
 })
 
 test('the react entry point reaches core and nothing else', async () => {
-  // The four entry points are separately consumable, and `package.json` maps
-  // each to raw source — so an import of `./react` that reached `./server`
-  // would pull the SDK's types into a consumer's typecheck, and one that
-  // reached `./ui` would pull React and Tailwind into a headless one.
+  // The four entry points are separately consumable, so an import of `./react`
+  // that reached `./server` would drag the SDK into a browser bundle, and one
+  // that reached `./ui` would drag React's DOM components into a headless host.
+  //
+  // The walk is `test/imports.ts` rather than the regex that used to live here.
+  // That regex matched ` from '…'` — single quotes only — and `src/ui/` is
+  // written in double quotes, so the day this walk was pointed anywhere near
+  // `ui` it would have found a module that imports nothing, reached the end,
+  // and passed.
   const src = `${import.meta.dir}/..`
-  const reached = new Set<string>()
-  const queue = [`${src}/react/index.ts`]
+  const reached = await reachableFrom(`${src}/react/index.ts`)
 
-  while (queue.length > 0) {
-    const path = queue.pop()
-    if (path === undefined || reached.has(path)) continue
-    reached.add(path)
-    const source = await Bun.file(path).text()
-    expect(source).not.toContain('@anthropic-ai/claude-agent-sdk')
-    for (const [, specifier] of source.matchAll(/ from '(\.[^']+)'/g)) {
-      if (specifier) queue.push(resolve(dirname(path), specifier))
-    }
+  for (const path of reached) {
+    expect(await Bun.file(path).text()).not.toContain('@anthropic-ai/claude-agent-sdk')
   }
 
   const outside = [...reached]

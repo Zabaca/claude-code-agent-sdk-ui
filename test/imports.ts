@@ -21,11 +21,31 @@ import { dirname, resolve } from 'node:path'
  * our files does this file pull in", and a dependency is not one of our files.
  */
 export function specifiersIn(source: string): string[] {
+  return allSpecifiersIn(source).filter((specifier) => specifier.startsWith('.'))
+}
+
+/**
+ * The other half: everything a file imports that is *not* one of ours — the
+ * packages it would make a consumer install.
+ */
+export function bareSpecifiersIn(source: string): string[] {
+  return allSpecifiersIn(source).filter((specifier) => !specifier.startsWith('.'))
+}
+
+/**
+ * Matched a line at a time, deliberately. A pattern applied to the whole file
+ * can run its `[^'"]+` across a newline and report the space between two
+ * unrelated quotes as a module name — which is a guard reporting imports that
+ * do not exist, one step worse than missing ones.
+ */
+function allSpecifiersIn(source: string): string[] {
   const found: string[] = []
-  for (const [, , specifier] of source.matchAll(
-    /(?:\bfrom|\bimport)\s*\(?\s*(['"])(\.[^'"]+)\1/g,
-  )) {
-    if (specifier !== undefined) found.push(specifier)
+  for (const line of source.split('\n')) {
+    for (const [, , specifier] of line.matchAll(
+      /(?:\bfrom|\bimport)\s*\(?\s*(['"])([^'"]+)\1/g,
+    )) {
+      if (specifier !== undefined) found.push(specifier)
+    }
   }
   return found
 }

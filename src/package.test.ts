@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
-import { relative, resolve } from 'node:path'
+import { readdir } from 'node:fs/promises'
+import { join, relative, resolve } from 'node:path'
 
 import { installPacked, type Consumer } from '../test/consumer.ts'
 import { reachableFrom } from '../test/imports.ts'
@@ -238,6 +239,27 @@ test("a fresh project's own typecheck passes against the shipped types", async (
   const ran = consumer.run(['./node_modules/typescript/bin/tsc', '--noEmit'])
   expect(`${ran.stdout}${ran.stderr}`.trim()).toBe('')
   expect(ran.code).toBe(0)
+}, 180_000)
+
+test('the shipped core loads no SDK, and the shipped server loads it lazily', async () => {
+  // Both claims are made about the build a consumer installs rather than about
+  // the sources, because the sources are allowed to name the SDK — in types,
+  // which compile away — and only the emitted JavaScript can say whether they
+  // did. `src/core/index.test.ts` holds the same line one layer earlier.
+  const sdk = '@anthropic-ai/claude-agent-sdk'
+  const dist = join(consumer.dir, 'node_modules/@zabaca/claude-code-agent-sdk-ui/dist')
+
+  for (const file of await readdir(join(dist, 'core'))) {
+    if (!file.endsWith('.js')) continue
+    expect(await Bun.file(join(dist, 'core', file)).text()).not.toContain(sdk)
+  }
+
+  // The handler names it exactly once, inside an `await import(…)`, so
+  // constructing a handler costs no credential and no module load.
+  const handler = await Bun.file(join(dist, 'server/handler.js')).text()
+  expect(handler.match(new RegExp(sdk, 'g'))?.length).toBe(1)
+  expect(handler).toMatch(new RegExp(`await import\\(['"]${sdk}['"]\\)`))
+  expect(handler).not.toMatch(new RegExp(`^import .*${sdk}`, 'm'))
 }, 180_000)
 
 test('the README the tarball carries names every entry point it ships', async () => {
