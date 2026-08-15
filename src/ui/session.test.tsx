@@ -1677,6 +1677,14 @@ test('the way back appears only once the reader has scrolled away from the tail'
   // document is what moves. happy-dom computes no layout, so the metrics a
   // browser would have worked out are stated.
   const page = document.scrollingElement as HTMLElement
+  where(page, { scrollHeight: 4000, scrollTop: 3200, clientHeight: 800 })
+  await act(async () => {
+    page.dispatchEvent(new Event('scroll', { bubbles: false }))
+  })
+  expect(document.querySelector('[data-jump]')).toBeNull()
+
+  // Now the reader drags back up, which is the only thing that stops the
+  // following.
   where(page, { scrollHeight: 4000, scrollTop: 0, clientHeight: 800 })
   await act(async () => {
     page.dispatchEvent(new Event('scroll', { bubbles: false }))
@@ -1718,11 +1726,47 @@ test('a Frame arriving while the reader is at the tail follows it', async () => 
   view.unmount()
 })
 
+test('content growing under a reader who has not moved does not stop the following', async () => {
+  // The way this broke in a browser. The follow effect scrolls, that scroll
+  // fires an event, and by the time the event is read the stream has added
+  // more than the slack — so the transcript unpinned itself, on its own scroll,
+  // without the reader touching anything. Growth never moves anybody: only a
+  // reader dragging upwards does.
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  const page = document.scrollingElement as HTMLElement
+  where(page, { scrollHeight: 4000, scrollTop: 3200, clientHeight: 800 })
+  await act(async () => {
+    page.dispatchEvent(new Event('scroll', { bubbles: false }))
+  })
+
+  // The stream ran on: taller, and the reader is now well short of the end
+  // without having asked to be.
+  where(page, { scrollHeight: 9000, scrollTop: 3200, clientHeight: 800 })
+  await act(async () => {
+    page.dispatchEvent(new Event('scroll', { bubbles: false }))
+  })
+
+  expect(document.querySelector('[data-jump]')).toBeNull()
+
+  const scrolled: number[] = []
+  page.scrollTo = watchScroll(scrolled)
+  await act(async () => fake.frame({ kind: 'text', text: 'still following' }))
+
+  expect(scrolled).toEqual([9000])
+  view.unmount()
+})
+
 test('a Frame arriving while the reader is scrolled away does not move them', async () => {
   const fake = fakeSse()
   const view = await mount(fake)
 
   const page = document.scrollingElement as HTMLElement
+  where(page, { scrollHeight: 4000, scrollTop: 3200, clientHeight: 800 })
+  await act(async () => {
+    page.dispatchEvent(new Event('scroll', { bubbles: false }))
+  })
   where(page, { scrollHeight: 4000, scrollTop: 0, clientHeight: 800 })
   await act(async () => {
     page.dispatchEvent(new Event('scroll', { bubbles: false }))

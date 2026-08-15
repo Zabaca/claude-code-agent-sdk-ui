@@ -102,6 +102,8 @@ export function useFollowing(watched: unknown): Following {
   const log = React.useRef<HTMLDivElement | null>(null)
   /** Whether to follow. Read inside the effect, where a stale value is wrong. */
   const pinned = React.useRef(true)
+  /** Where the scroller was last seen, which is how a drag is told from growth. */
+  const wasAt = React.useRef(0)
   /** The same fact, for rendering. Set only when it changes. */
   const [following, setFollowing] = React.useState(true)
 
@@ -109,7 +111,19 @@ export function useFollowing(watched: unknown): Following {
     const read = (): void => {
       const scroller = scrollerFor(log.current)
       if (!scroller) return
-      const tail = atBottom(scroller)
+      const top = scroller.scrollTop
+      // Only a reader moving *up* stops the following.
+      //
+      // Being short of the end is not enough on its own, because the follow
+      // effect's own `scrollTo` fires one of these: between that scroll and
+      // this read, a fast stream has already added more than the slack, so the
+      // transcript would unpin itself on its own scroll with nobody touching
+      // anything. Content growing never lowers `scrollTop`; a drag is the only
+      // thing that does.
+      const dragged = top < wasAt.current - 1
+      wasAt.current = top
+      // Reaching the end always follows again, however you got there.
+      const tail = atBottom(scroller) ? true : dragged ? false : pinned.current
       if (tail === pinned.current) return
       pinned.current = tail
       setFollowing(tail)
@@ -123,9 +137,12 @@ export function useFollowing(watched: unknown): Following {
   React.useEffect(() => {
     if (!pinned.current) return
     const scroller = scrollerFor(log.current)
+    if (!scroller) return
     // Instant, not smooth: this runs per token, and a smooth scroll restarted
     // sixty times a second never arrives.
-    scroller?.scrollTo({ top: scroller.scrollHeight })
+    scroller.scrollTo({ top: scroller.scrollHeight })
+    // Recorded as ours, so the event this causes is not read as a drag.
+    wasAt.current = scroller.scrollHeight
   }, [watched])
 
   const resume = React.useCallback((): void => {
@@ -136,7 +153,9 @@ export function useFollowing(watched: unknown): Following {
   const jumpToBottom = React.useCallback((): void => {
     resume()
     const scroller = scrollerFor(log.current)
-    scroller?.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' })
+    if (!scroller) return
+    wasAt.current = scroller.scrollHeight
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' })
   }, [resume])
 
   return { log, following, jumpToBottom, resume }
