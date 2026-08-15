@@ -19,6 +19,18 @@ import { ClaudePrompt } from './claude-prompt.tsx'
 import { ClaudeThinking } from './claude-thinking.tsx'
 import { ClaudeToolCall } from './claude-tool-call.tsx'
 import { cn } from './lib/cn.ts'
+import {
+  arrange,
+  hueOf,
+  threadOf,
+  ThreadMeters,
+  ThreadTag,
+  useThreads,
+  type Arranged,
+  type ThreadClock,
+  type ThreadDisplay,
+  type ThreadReading,
+} from './thread.tsx'
 
 /**
  * `ClaudeSession` — the thin container that wires a Session to the components.
@@ -32,6 +44,8 @@ export function ClaudeSession({
   session,
   header,
   placeholder = 'Try "fix the flaky test"',
+  threads = 'inline',
+  clock,
   className,
 }: {
   session: AgentSession
@@ -42,6 +56,19 @@ export function ClaudeSession({
    */
   header?: React.ReactNode
   placeholder?: string
+  /**
+   * Where a Thread's Messages go: in Transcript order, grouped under the `Task`
+   * call that opened them, or left out. The Transcript is flat precisely so
+   * this stays the renderer's decision rather than `reduce`'s.
+   */
+  threads?: ThreadDisplay
+  /**
+   * What the Thread meters time themselves against. Injectable for the reason
+   * the transport is: a duration driven by the wall clock is one a test cannot
+   * pin. `core` is pure and carries no timestamps, so this is the renderer's
+   * own clock — see the note at the top of `thread.tsx`.
+   */
+  clock?: ThreadClock
   className?: string
 }) {
   const [text, setText] = React.useState('')
@@ -50,6 +77,8 @@ export function ClaudeSession({
   const [highlighted, setHighlighted] = React.useState(0)
   const { transcript } = session
   const working = transcript.turn.status === 'working'
+  const opened = useThreads(transcript.messages, clock)
+  const byThread = new Map(opened.map((thread) => [thread.thread, thread]))
 
   // What the runtime advertises, narrowed to what has been typed. Derived every
   // render rather than held, so a `commands` Frame arriving mid-Session — a
@@ -86,12 +115,17 @@ export function ClaudeSession({
       {header}
 
       <div role="log" className="cc:flex cc:min-w-0 cc:flex-col cc:gap-2">
-        {transcript.messages.map((message, at) => (
+        {arrange(transcript.messages, threads).map((entry) => (
           // The Transcript is append-and-patch-the-tail, so a Message's index
           // is stable for as long as it is on screen.
-          <Entry key={at} message={message} />
+          <Entry key={entry.at} entry={entry} threads={byThread} />
         ))}
       </div>
+
+      {/* One meter per Thread, outside the Transcript on purpose: a background
+          agent's progress is a fact about now, not an entry in the order, and
+          it has to stay readable while the Transcript scrolls past it. */}
+      <ThreadMeters threads={opened} />
 
       {/* Claude Code's working line, driven by real Turn state rather than by
           a timer of the container's own. */}
@@ -265,15 +299,40 @@ function bare(name: string): string {
  * gets its real surface in #12; that is what `Undrawn` stands in for, not what
  * it should look like.
  */
-function Entry({ message }: { message: Message }) {
-  const drawn = draw(message)
+function Entry({
+  entry,
+  threads,
+}: {
+  entry: Arranged
+  threads: ReadonlyMap<string, ThreadReading>
+}) {
+  const drawn = draw(entry.message)
+  const nested = entry.nested ?? []
   // A Message that draws nothing takes no room — an empty row is still the
   // screen holding space for something it will not explain. `draw` is what
   // decides that, and it does so in exactly one place: a recall that surfaced
   // nothing. Every other kind draws something, which is what keeps the golden
   // log's "nothing silently dropped" check honest.
-  if (drawn === null) return null
-  return <Attributed message={message}>{drawn}</Attributed>
+  //
+  // Unless it is nesting a Thread: an entry that draws nothing itself but is
+  // holding a Thread's work has to stand, or dropping the row would drop the
+  // work with it.
+  if (drawn === null && nested.length === 0) return null
+  return (
+    <Attributed entry={entry} threads={threads}>
+      {drawn}
+      {nested.length === 0 ? null : (
+        <div
+          data-thread-nest={entry.message.kind === 'tool-call' ? entry.message.opens?.thread : ''}
+          className="cc:mt-2 cc:flex cc:min-w-0 cc:flex-col cc:gap-2"
+        >
+          {nested.map((inner) => (
+            <Entry key={inner.at} entry={inner} threads={threads} />
+          ))}
+        </div>
+      )}
+    </Attributed>
+  )
 }
 
 function draw(message: Message): React.ReactNode {
@@ -329,19 +388,46 @@ function draw(message: Message): React.ReactNode {
 }
 
 /**
- * A Message whose Thread is marked, so sub-agent work is not mistaken for the
- * main agent's. Attribution only — what a Thread is *doing* is a meter, and
- * that is #9.
+ * A Message marked with the Thread it belongs to — or, for a `Task` call, with
+ * the Thread it opened.
+ *
+ * Both carry the same marker, and that is the point: the `Task` line and every
+ * line of the work it started read as one Thread, in one colour, under one
+ * ordinal. Without it, three background agents' tool calls arrive in the
+ * Transcript indistinguishable from the main agent's, which is the single trap
+ * this whole surface exists to close.
+ *
+ * A Thread's work is also indented, so the main agent's own line of work stays
+ * followable down the left edge.
  */
-function Attributed({ message, children }: { message: Message; children: React.ReactNode }) {
-  const thread = 'thread' in message ? message.thread : undefined
-  if (thread === undefined) return <div>{children}</div>
+function Attributed({
+  entry,
+  threads,
+  children,
+}: {
+  entry: Arranged
+  threads: ReadonlyMap<string, ThreadReading>
+  children: React.ReactNode
+}) {
+  const message = entry.message
+  const thread = threadOf(message)
+  const opens = message.kind === 'tool-call' ? message.opens?.thread : undefined
+  const reading = threads.get(thread ?? opens ?? '')
+  const tool = message.kind === 'tool-call' ? message.name : undefined
+
   return (
     <div
-      data-thread={thread}
-      className="cc:min-w-0 cc:border-l cc:pl-3"
-      style={{ borderColor: 'var(--cc-rule)' }}
+      {...(thread !== undefined ? { 'data-thread': thread } : {})}
+      {...(opens !== undefined ? { 'data-opens': opens } : {})}
+      {...(tool !== undefined ? { 'data-tool': tool } : {})}
+      className={cn('cc:min-w-0', thread === undefined ? undefined : 'cc:border-l cc:pl-3')}
+      style={
+        thread === undefined
+          ? undefined
+          : { borderColor: reading ? hueOf(reading.ordinal) : 'var(--cc-rule)' }
+      }
     >
+      {reading === undefined ? null : <ThreadTag thread={reading} />}
       {children}
     </div>
   )
