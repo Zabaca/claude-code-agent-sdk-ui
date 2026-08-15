@@ -142,7 +142,46 @@ test('the opening log shows prose and a tool call in every state it has', async 
   expect(transcript.turn).toEqual({ status: 'idle' })
 })
 
+test('the opening log plays every divergence, and each reaches the screen', async () => {
+  const replay = replayTransport({ wait: immediately })
+  const view = await mount(replay)
+  await drain(replay)
+
+  // The points where the Transcript reads the same before and after while what
+  // the agent can see has changed. A playground that played none of them would
+  // demonstrate the screen at its most convincing and least honest.
+  expect(marks()).toEqual(['recall', 'hook', 'compacted', 'reset'])
+  // And a Turn that died, beside the two that did not.
+  expect(outcomes()).toEqual(['settled', 'failed', 'settled'])
+
+  const said = screen.getByRole('log').textContent ?? ''
+  expect(said).toContain('180,000')
+  expect(said).toContain('42,000')
+  expect(said).toContain('error_max_turns')
+
+  // Two recall Frames were played and one marker was drawn: the one that
+  // surfaced nothing is silent because nothing arrived, not because the
+  // marker is missing — which is the whole distinction, shown rather than
+  // asserted about a mock.
+  expect(replay.log.filter((frame) => frame.kind === 'recall').length).toBe(2)
+  view.unmount()
+})
+
 // --- driving the seam ---------------------------------------------------------
+
+/** Which divergence each marker reports, in Transcript order. */
+function marks(): (string | undefined)[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-divergence]')].map(
+    (one) => one.dataset['divergence'],
+  )
+}
+
+/** Which outcome each Turn-ending entry claims, in Transcript order. */
+function outcomes(): (string | undefined)[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-outcome]')].map(
+    (one) => one.dataset['outcome'],
+  )
+}
 
 /** No waiting at all, so a whole script lands in microtasks and uses no timer. */
 function immediately(): Promise<void> {

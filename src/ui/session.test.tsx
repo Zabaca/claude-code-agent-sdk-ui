@@ -343,6 +343,10 @@ test('a recall says what surfaced; one that surfaced nothing is correctly silent
   // text was never said in this conversation.
   expect(said).toContain('/memories/ports.md')
   expect(said).toContain('personal')
+  // And what it says. The path alone reports that something arrived; the
+  // content is the thing the agent is now acting on, and it is what nobody in
+  // this conversation ever said.
+  expect(said).toContain('Prefers Bun.')
 
   // And the empty one leaves no row behind either: a blank entry in the log is
   // still the screen taking up space for something it will not explain.

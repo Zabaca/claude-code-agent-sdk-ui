@@ -358,8 +358,15 @@ function Recall({ message }: { message: RecallMessage }) {
   )
 }
 
+/**
+ * Where a memory came from and what it says. The path alone would report only
+ * that something arrived; the content is the thing the agent is now acting on,
+ * and it is carried, so dropping it would leave a viewer told that context
+ * appeared and not told what it was.
+ */
 function from(memory: RecalledMemory): string {
-  return memory.scope === undefined ? memory.path : `${memory.path} (${memory.scope})`
+  const where = memory.scope === undefined ? memory.path : `${memory.path} (${memory.scope})`
+  return memory.content === undefined ? where : `${where}: ${memory.content}`
 }
 
 /**
