@@ -119,6 +119,45 @@ export type AgentQuery = AsyncIterable<ClassifyInput> & {
    * in it and never a Turn that failed.
    */
   supportedCommands?(): Promise<AgentSlashCommand[]>
+  /**
+   * A reading of the context window, asked for rather than waited for.
+   *
+   * The window is otherwise silent: `context_usage` rides only on the
+   * synthetic assistant message `/context` produces, so a Session where nobody
+   * typed `/context` never reports how full it is — and the meter that exists
+   * to answer "how much room is left" sat empty through every Turn.
+   *
+   * Optional, because a runtime too old to answer is a meter with no reading
+   * and never a Turn that failed.
+   */
+  getContextUsage?(): Promise<AgentContextUsage>
+  /**
+   * The subscription meters — the five-hourly and weekly windows.
+   *
+   * Named exactly as the SDK names it, warning and all: it is experimental
+   * there, so it is optional here and every failure is swallowed. What it
+   * costs to be wrong about is a status line with fewer figures on it.
+   */
+  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?(): Promise<AgentUsage>
+}
+
+/**
+ * As much of the SDK's context-usage answer as this handler reads, every field
+ * optional on the way in — the rule `classify` follows, for the same reason: a
+ * runtime whose answer has grown a field this build has not heard of is not a
+ * reason to drop the reading.
+ */
+export type AgentContextUsage = {
+  totalTokens?: number
+  maxTokens?: number
+  percentage?: number
+  categories?: { name?: string; tokens?: number; isDeferred?: boolean }[]
+}
+
+/** As much of the SDK's usage answer as this handler reads. */
+export type AgentUsage = {
+  rate_limits_available?: boolean
+  rate_limits?: Record<string, { utilization?: number | null } | null> | null
 }
 
 /**
@@ -434,7 +473,12 @@ class AgentSession {
     }
     // The runtime has just named what it loaded, so now it can be asked what it
     // advertises. Started here and never awaited here: see `#describe`.
-    if (isInit(message)) this.#describe()
+    if (isInit(message)) {
+      this.#describe()
+      // A window that is already full of system prompt, tools and memory
+      // before anyone has said anything is worth a reading of its own.
+      this.#meters()
+    }
     for (const frame of classify(message)) this.#append(frame)
   }
 
@@ -475,6 +519,46 @@ class AgentSession {
         // that broke — failing a Turn that ran perfectly.
       }
     })()
+  }
+
+  /**
+   * Asks the runtime for its meters, and returns immediately.
+   *
+   * The same shape as `#describe`, for the same reason and the same hazard:
+   * the answer arrives on the transport the messages arrive on, so awaiting it
+   * from inside the message loop would stop the loop pulling the thing it is
+   * waiting for. Started here, resolved on its own, awaited nowhere.
+   *
+   * Neither reading costs tokens — both are control requests to the runtime
+   * rather than anything the model sees — and neither is worth a failure: a
+   * meter that cannot be read is a meter with no reading, and a Turn that ran
+   * perfectly must not be reported as broken because a number did not arrive.
+   */
+  #meters(): void {
+    const query = this.#query
+    if (!query) return
+
+    const context = query.getContextUsage
+    if (context) {
+      void (async () => {
+        try {
+          this.#append(contextFrom(await context.call(query)))
+        } catch {
+          // Caught here, for the reason `#describe` catches here.
+        }
+      })()
+    }
+
+    const usage = query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
+    if (usage) {
+      void (async () => {
+        try {
+          for (const frame of rateLimitsFrom(await usage.call(query))) this.#append(frame)
+        } catch {
+          // Experimental upstream: this one is expected to fail one day.
+        }
+      })()
+    }
   }
 
   // --- partial on the wire, coalesced in the log ------------------------------
@@ -544,6 +628,9 @@ class AgentSession {
     if (retained.kind === 'settled' || retained.kind === 'failed') {
       this.#turnOpen = false
       this.#interrupting = false
+      // The end of a Turn is when the meters have just moved, and the only
+      // moment nothing is being pulled from the transport.
+      this.#meters()
     }
 
     this.#log.push(retained)
@@ -630,6 +717,59 @@ function partialIn(
 /** The runtime naming what it loaded — where a Session gets its id (ADR-0002). */
 function isInit(message: ClassifyInput): boolean {
   return str(message['type']) === 'system' && str(message['subtype']) === 'init'
+}
+
+/**
+ * A context reading, as a Frame.
+ *
+ * The answer is read the way `classify` reads an `SDKMessage`: every field
+ * optional on the way in, because a runtime answering with less than this
+ * build expects has still answered. Only `totalTokens` has no honest absence —
+ * the Frame is a reading, and a reading needs a number — so a runtime that
+ * gives none is reported as zero, which the meters draw as an empty window
+ * rather than as no window at all. A category with no name is dropped instead
+ * of retained half-built.
+ */
+function contextFrom(usage: AgentContextUsage): Frame {
+  const categories = (usage.categories ?? []).flatMap((category) =>
+    category.name === undefined
+      ? []
+      : [
+          {
+            name: category.name,
+            ...(category.tokens === undefined ? {} : { tokens: category.tokens }),
+            ...(category.isDeferred === true ? { kind: 'deferred' as const } : {}),
+          },
+        ],
+  )
+  return {
+    kind: 'context',
+    totalTokens: usage.totalTokens ?? 0,
+    ...(usage.maxTokens === undefined ? {} : { maxTokens: usage.maxTokens }),
+    ...(usage.percentage === undefined ? {} : { percentage: usage.percentage }),
+    ...(categories.length === 0 ? {} : { categories }),
+  }
+}
+
+/**
+ * One Frame per subscription window the runtime reported.
+ *
+ * `rate_limits_available` is false for API-key, Bedrock and Vertex sessions,
+ * where there is no subscription to meter — and there the answer is no Frames
+ * rather than Frames reading zero, because "no limit to report" and "none of
+ * the limit used" are different facts and only one of them is true.
+ *
+ * The reset times are deliberately dropped: this answer carries them as ISO
+ * strings while a `rate_limit_event` carries a number of unstated units, and a
+ * Frame that mixed the two would be a field nobody could read.
+ */
+function rateLimitsFrom(usage: AgentUsage): Frame[] {
+  if (usage.rate_limits_available === false) return []
+  return Object.entries(usage.rate_limits ?? {}).flatMap(([limitType, limit]) =>
+    typeof limit?.utilization === 'number'
+      ? [{ kind: 'rate-limit' as const, limitType, utilization: limit.utilization }]
+      : [],
+  )
 }
 
 /**

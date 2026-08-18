@@ -1,10 +1,12 @@
 import type { ClassifyInput } from '../core/classify.ts'
 import type {
+  AgentContextUsage,
   AgentPromptMessage,
   AgentQuery,
   AgentQueryFactory,
   AgentQueryParams,
   AgentSlashCommand,
+  AgentUsage,
 } from './handler.ts'
 import { pushable } from './pushable.ts'
 
@@ -46,6 +48,15 @@ export type FakeQuery = {
   describes(commands: AgentSlashCommand[]): void
   /** Answers it by throwing, as a runtime that could not describe itself does. */
   describeBreaks(error: unknown): void
+  /** How many times the meters were asked for. */
+  meterCalls: number
+  /**
+   * Answers whatever meter questions are outstanding, on the message stream —
+   * for the reason `describes` answers there. Both readings are control
+   * requests, so both are behind the messages already queued, and a handler
+   * that awaited either from inside its own loop would deadlock on it.
+   */
+  meters(context: AgentContextUsage, usage: AgentUsage): void
 }
 
 /** A control reply riding the message stream. Never yielded as a Message. */
@@ -55,6 +66,8 @@ export function fakeQuery(): FakeQuery {
   const stream = pushable<ClassifyInput | Reply>()
   let asked: ((commands: AgentSlashCommand[]) => void)[] = []
   let refused: ((error: unknown) => void)[] = []
+  let context: ((usage: AgentContextUsage) => void)[] = []
+  let limits: ((usage: AgentUsage) => void)[] = []
 
   /** Everything on the stream except the control replies, which are consumed. */
   async function* messages(): AsyncGenerator<ClassifyInput> {
@@ -72,6 +85,7 @@ export function fakeQuery(): FakeQuery {
     prompts: [],
     interrupts: 0,
     describeCalls: 0,
+    meterCalls: 0,
     say: (message) => stream.push(message),
     end: () => stream.end(),
     break: (error) => stream.fail(error),
@@ -95,6 +109,17 @@ export function fakeQuery(): FakeQuery {
         },
       })
     },
+    meters: (usage, limit) => {
+      stream.push({
+        answer: () => {
+          const [windows, subscriptions] = [context, limits]
+          context = []
+          limits = []
+          for (const resolve of windows) resolve(usage)
+          for (const resolve of subscriptions) resolve(limit)
+        },
+      })
+    },
     createQuery: (params) => {
       fake.calls.push(params)
       void collect(params.prompt, fake.prompts)
@@ -112,6 +137,12 @@ export function fakeQuery(): FakeQuery {
             refused.push(reject)
           })
         },
+        getContextUsage: () => {
+          fake.meterCalls += 1
+          return new Promise<AgentContextUsage>((resolve) => context.push(resolve))
+        },
+        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () =>
+          new Promise<AgentUsage>((resolve) => limits.push(resolve)),
       }
       return query
     },

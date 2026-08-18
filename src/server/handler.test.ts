@@ -4,7 +4,7 @@ import { readdir } from 'node:fs/promises'
 import type { ClassifyInput } from '../core/classify.ts'
 import { decodeEvents } from '../core/wire.ts'
 import { fakeQuery } from './fake.ts'
-import { createAgentHandler } from './handler.ts'
+import { createAgentHandler, type AgentQueryFactory } from './handler.ts'
 
 test('a Session streams Frames over SSE, each event carrying its index as id', async () => {
   const fake = fakeQuery()
@@ -957,3 +957,79 @@ function aborted(): ClassifyInput {
     errors: ['Request was aborted'],
   }
 }
+
+// --- the meters: asked for, never waited for -----------------------------------
+
+test('the window and the subscription are asked for, not waited for', async () => {
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('hi'))
+  fake.say(init('sess-meters'))
+  // Answered on the message stream, behind everything already queued — which
+  // is where a runtime answers a control request, and the whole reason this
+  // cannot be awaited from inside the message loop.
+  fake.meters(
+    { totalTokens: 310_000, maxTokens: 1_000_000, percentage: 31 },
+    { rate_limits_available: true, rate_limits: { five_hour: { utilization: 4 } } },
+  )
+
+  const events = await read(stream, 6)
+  const context = events.find((event) => event.data['kind'] === 'context')?.data ?? {}
+  const limit = events.find((event) => event.data['kind'] === 'rate-limit')?.data ?? {}
+
+  // Breakage this fails on: nothing asking. `context_usage` rides only on the
+  // synthetic assistant message `/context` produces, so a Session where nobody
+  // typed `/context` reported no window at all — and the meter that exists to
+  // answer "how much room is left" stayed empty through every Turn.
+  expect(context['totalTokens']).toBe(310_000)
+  expect(context['maxTokens']).toBe(1_000_000)
+  expect(context['percentage']).toBe(31)
+  expect(limit['limitType']).toBe('five_hour')
+  expect(limit['utilization']).toBe(4)
+})
+
+test('a runtime with no meters to give is a Session with no readings, not a failure', async () => {
+  const fake = fakeQuery()
+  // A runtime too old to answer either question. Both are optional on
+  // `AgentQuery` precisely so this is a Session that works with fewer figures
+  // on it — the handler must not treat a missing capability as a broken query.
+  const older: AgentQueryFactory = (params) => {
+    const { getContextUsage, usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET, ...rest } =
+      fake.createQuery(params)
+    return rest
+  }
+  const handler = createAgentHandler({ createQuery: older })
+
+  const stream = await handler(open())
+  await handler(prompt('hi'))
+  fake.say(init('sess-old'))
+  fake.say(says('and it still answers'))
+  fake.say(settled())
+
+  const events = await read(stream, 6)
+  expect(events.some((event) => event.data['kind'] === 'context')).toBe(false)
+  expect(events.some((event) => event.data['kind'] === 'rate-limit')).toBe(false)
+  // The Turn itself is untouched: it ran, it said something, and it settled.
+  expect(events.some((event) => event.data['kind'] === 'settled')).toBe(true)
+  expect(events.some((event) => event.data['kind'] === 'failed')).toBe(false)
+})
+
+test('a session with no subscription reports no limits, rather than limits of zero', async () => {
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('hi'))
+  fake.say(init('sess-apikey'))
+  // What an API-key, Bedrock or Vertex session answers: there is no
+  // subscription to meter.
+  fake.meters({ totalTokens: 1_000 }, { rate_limits_available: false, rate_limits: null })
+
+  const events = await read(stream, 5)
+  // "No limit to report" and "none of the limit used" are different facts, and
+  // only one of them is true. A 0% meter would state the wrong one.
+  expect(events.some((event) => event.data['kind'] === 'rate-limit')).toBe(false)
+  expect(events.some((event) => event.data['kind'] === 'context')).toBe(true)
+})
