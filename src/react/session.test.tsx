@@ -2,6 +2,7 @@ import { act, renderHook } from '@testing-library/react'
 import { expect, test } from 'bun:test'
 import { relative } from 'node:path'
 
+import { UNNAMED_LIMIT } from '../core/transcript.ts'
 import { reachableFrom } from '../../test/imports.ts'
 import { fakeSse, type FakeSse } from './fake.ts'
 import {
@@ -642,6 +643,19 @@ test('mode is the permission mode the runtime actually loaded', async () => {
   const session = await mount(fake)
 
   // Nothing has been loaded yet, so the handler's own default stands (ADR-0003).
+  // `bypass`, not `auto`: this package ships a handler that runs every tool
+  // without asking, and a composer that guesses milder than the thing it is
+  // attached to understates what is about to happen with nobody's permission.
+  expect(session.current.mode).toBe('bypass')
+
+  // The mode the handler actually defaults to, and the one this got wrong: it
+  // was drawn as `auto`, which is a milder mode — and one the SDK separately
+  // has, so the line named a real mode that was not the one running.
+  await act(async () => fake.frame({ kind: 'harness', permissionMode: 'bypassPermissions' }))
+  expect(session.current.mode).toBe('bypass')
+
+  // And the SDK's own `auto`, which is where that name belongs.
+  await act(async () => fake.frame({ kind: 'harness', permissionMode: 'auto' }))
   expect(session.current.mode).toBe('auto')
 
   await act(async () => fake.frame({ kind: 'harness', permissionMode: 'plan' }))
@@ -680,7 +694,10 @@ test('the two meters are separate readings, and neither stands in for the other'
     }),
   )
 
-  expect(alone.current.transcript.rateLimit).toEqual({
+  // Keyed by which limit it is: the runtime sends the five-hourly and the
+  // weekly separately, and one slot for both is one meter drawn under the
+  // other's name.
+  expect(alone.current.transcript.rateLimits['weekly']).toEqual({
     status: 'allowed_warning',
     limitType: 'weekly',
     utilization: 0.62,
@@ -706,13 +723,14 @@ test('the two meters are separate readings, and neither stands in for the other'
     maxTokens: 200_000,
     percentage: 45.75,
   })
-  expect(window.current.transcript.rateLimit).toBeUndefined()
+  expect(window.current.transcript.rateLimits).toEqual({})
 
   // Both present, and still two readings rather than one blended figure.
   await act(async () => other.frame({ kind: 'rate-limit', utilization: 0.62 }))
 
   expect(window.current.transcript.context?.totalTokens).toBe(91_500)
-  expect(window.current.transcript.rateLimit?.utilization).toBe(0.62)
+  // No type on this one, so it is kept under the name for exactly that.
+  expect(window.current.transcript.rateLimits[UNNAMED_LIMIT]?.utilization).toBe(0.62)
 
   window.unmount()
 })

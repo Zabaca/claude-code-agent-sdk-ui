@@ -1,5 +1,6 @@
 import type { Frame } from './frame.ts'
 import type { PartialKind } from './partial.ts'
+import { UNNAMED_LIMIT } from './transcript.ts'
 import type {
   CompactedMessage,
   ContextUsage,
@@ -8,6 +9,7 @@ import type {
   Message,
   OutcomeMessage,
   PromptMessage,
+  RateLimit,
   ReasoningMessage,
   RecallMessage,
   TextMessage,
@@ -41,6 +43,7 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
   const hooks = new Map<string, number>()
   /** Each Thread's own context window, kept off the Session's meter. */
   const threadContext: Record<string, ContextUsage> = {}
+  const rateLimits: Record<string, RateLimit> = {}
   let turn: Turn = { status: 'idle' }
 
   const pending = options.pending ?? []
@@ -193,7 +196,12 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
       }
       case 'rate-limit': {
         const { kind, ...rateLimit } = frame
-        state.rateLimit = rateLimit
+        // Which limit this is decides which meter it lands on. The runtime
+        // sends the five-hourly and the weekly in separate events, so a single
+        // slot would show whichever arrived last under whatever name the
+        // screen happened to give it — the mistake #17 made with a Thread's
+        // context window, in a second place.
+        rateLimits[rateLimit.limitType ?? UNNAMED_LIMIT] = rateLimit
         break
       }
       case 'cost': {
@@ -331,7 +339,7 @@ export function reduce(frames: readonly Frame[], options: ReduceOptions = {}): T
     turn = { status: 'working' }
   }
 
-  return { ...compact<SessionState>(state), messages, turn, threadContext }
+  return { ...compact<SessionState>(state), messages, turn, threadContext, rateLimits }
 }
 
 /**
@@ -372,7 +380,7 @@ export type ReduceOptions = {
  * present — an empty record is "no Thread reported a window", which a viewer
  * can read without a null check.
  */
-type SessionState = Omit<Transcript, 'messages' | 'turn' | 'threadContext'>
+type SessionState = Omit<Transcript, 'messages' | 'turn' | 'threadContext' | 'rateLimits'>
 
 /**
  * The runtime's two terminal reasons for an abort. A Turn that ends this way

@@ -26,6 +26,7 @@ import { ClaudeTodoList } from './claude-todo-list.tsx'
 import { ClaudeToolCall } from './claude-tool-call.tsx'
 import { useFollowing } from './following.ts'
 import { cn } from './lib/cn.ts'
+import { SessionStatus } from './status.tsx'
 import { Markdown } from './markdown.tsx'
 import {
   arrange,
@@ -197,6 +198,11 @@ export function ClaudeSession({
           {session.error}
         </div>
       ) : null}
+
+      {/* The Session's meters, where a terminal keeps its status line: above
+          the composer, and drawn from what the runtime reported rather than
+          from anything worked out here. */}
+      <SessionStatus transcript={transcript} />
 
       <SlashMenu commands={offered} active={active} onHighlight={setHighlighted} />
 

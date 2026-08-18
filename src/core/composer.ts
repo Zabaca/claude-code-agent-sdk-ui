@@ -13,8 +13,18 @@
 
 import type { PromptImage } from './event.ts'
 
-/** The permission modes Claude Code cycles through with shift+tab. */
-export type ClaudeMode = 'auto' | 'manual' | 'accept-edits' | 'plan'
+/**
+ * The permission modes a composer can be in.
+ *
+ * The first four are what shift+tab cycles through. `bypass` is not one of
+ * them: Claude Code does not let you cycle into it, it is chosen when the
+ * runtime starts, and it is the mode where every tool runs without asking —
+ * which is why it needs a name of its own rather than borrowing `auto`'s. The
+ * SDK has its own `auto` mode that means something milder, so a composer that
+ * drew `bypassPermissions` as "auto mode on" was naming a different mode the
+ * runtime also has.
+ */
+export type ClaudeMode = 'auto' | 'manual' | 'accept-edits' | 'plan' | 'bypass'
 
 /** The efforts `/effort` steps through, in the order it steps through them. */
 export type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode'

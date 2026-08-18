@@ -25,6 +25,11 @@
  *   - the field is a `textarea`, not an `input`, so shift+Enter opens a second
  *     line as the terminal's composer does. It is sized to its content rather
  *     than to `rows`, and Enter still sends.
+ *   - a `bypass` mode, which upstream has no drawing for. The runtime this
+ *     package hosts defaults to `bypassPermissions` (ADR-0003), and drawing it
+ *     as `auto` said a milder thing than what was running — milder still
+ *     because the SDK has an `auto` of its own. It is out of `MODE_CYCLE`,
+ *     since Claude Code does not let you cycle into it either. Offered upstream
  *   - `ClaudeMode` and `ClaudeEffort` are defined in `core/composer.ts` and
  *     re-exported here unchanged, so that `react` can name a mode without
  *     depending on `ui`. The contract is identical and re-syncing is unaffected
@@ -42,6 +47,7 @@ import { cn } from "./lib/cn.ts";
  *   manual        ⏸  gray
  *   accept-edits  ⏵⏵ lavender
  *   plan          ⏸  teal
+ *   bypass        ⏵⏵ red   — ours, and not in the cycle
  *
  * Effort chips match `/effort` captures (glyph fills as effort rises):
  *   low ○ · medium ◐ · high ● · xhigh ◉ · max ◈ · ultracode ✦
@@ -77,7 +83,19 @@ const MODES: Record<
     color: "var(--cc-mode-plan)",
     hint: "(shift+tab to cycle) · ← for agents",
   },
+  bypass: {
+    glyph: "⏵⏵",
+    label: "bypass permissions on",
+    color: "var(--cc-mode-bypass)",
+    // No "(shift+tab to cycle)": this one is not in the cycle, and a line
+    // offering a keystroke that cannot leave the mode it is describing is
+    // worse than a line that says what the mode costs.
+    hint: "· every tool runs without asking",
+  },
 };
+
+/** The modes shift+tab moves between — `bypass` is not enterable by cycling. */
+const CYCLEABLE: ClaudeMode[] = ["auto", "manual", "accept-edits", "plan"];
 
 const EFFORTS: Record<
   ClaudeEffort,
@@ -96,7 +114,7 @@ const EFFORTS: Record<
 };
 
 /** shift+tab cycles the modes in this order, as Claude Code does. */
-export const MODE_CYCLE = Object.keys(MODES) as ClaudeMode[];
+export const MODE_CYCLE = CYCLEABLE;
 /** `/effort` steps through the efforts in this order. */
 export const EFFORT_CYCLE = Object.keys(EFFORTS) as ClaudeEffort[];
 

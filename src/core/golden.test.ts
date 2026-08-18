@@ -193,7 +193,10 @@ describe('the golden Frame log', () => {
       totalTokens: 7000,
       model: 'claude-haiku-4',
     })
-    expect(transcript.rateLimit).toMatchObject({ status: 'allowed_warning', utilization: 82 })
+    expect(transcript.rateLimits['five_hour']).toMatchObject({
+      status: 'allowed_warning',
+      utilization: 82,
+    })
   })
 
   test("keeps the Session's context meter clear of a Thread's own window", () => {

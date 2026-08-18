@@ -11,4 +11,5 @@ export type * from './partial.ts'
 // drawing its own screen still finds them beside the components.
 export { arrange, threadOf, threadsOf } from './thread.ts'
 export type * from './thread.ts'
+export { UNNAMED_LIMIT } from './transcript.ts'
 export type * from './transcript.ts'

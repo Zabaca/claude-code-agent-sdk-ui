@@ -90,7 +90,8 @@ test('the opening log meters the context as it fills, and the week separately', 
   // questions — and no chrome for either in v0.1, so `reduce` is where a
   // reviewer can see they did not blend.
   const transcript = reduce(frames)
-  expect(transcript.rateLimit?.utilization).toBeDefined()
+  const limit = Object.values(transcript.rateLimits)[0]
+  expect(limit?.utilization).toBeDefined()
   expect(transcript.context?.totalTokens).toBe(readings.at(-1))
-  expect(transcript.context?.totalTokens).not.toBe(transcript.rateLimit?.utilization)
+  expect(transcript.context?.totalTokens).not.toBe(limit?.utilization)
 })

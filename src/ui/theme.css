@@ -49,6 +49,8 @@
   --cc-mode-manual: var(--cc-muted);
   --cc-mode-accept-edits: #afafd7;
   --cc-mode-plan: #5fafaf;
+  /* Red, because it is the one mode that runs every tool without asking. */
+  --cc-mode-bypass: #f7768e;
   --cc-ultracode-rainbow: linear-gradient(
     90deg,
     #afafd7,

@@ -578,7 +578,7 @@ describe('what is true of the Session rather than of any one Message', () => {
       totalTokens: 120000,
       maxTokens: 200000,
     })
-    expect(transcript.rateLimit).toEqual({
+    expect(transcript.rateLimits['five_hour']).toEqual({
       status: 'allowed_warning',
       limitType: 'five_hour',
       utilization: 82,

@@ -49,8 +49,19 @@ export type Transcript = {
    * first asking whether any Thread ever reported one.
    */
   threadContext: Record<string, ContextUsage>
-  /** How much of the subscription is left. A different meter from the context. */
-  rateLimit?: RateLimit
+  /**
+   * How much of the subscription is left, keyed by which limit it is —
+   * `five_hour`, `seven_day`, and whatever else the runtime names. A different
+   * meter from the context window, on a different clock.
+   *
+   * Keyed rather than kept as a single latest reading, for the reason the
+   * Thread windows are (#17): the runtime reports each limit in its own event,
+   * so one written over another is a screen showing the weekly figure under the
+   * five-hourly's name, flipping between them as events arrive. A reading the
+   * runtime gave no type for is keyed {@link UNNAMED_LIMIT}. Always present, so
+   * a viewer reads one without first asking whether any arrived.
+   */
+  rateLimits: Record<string, RateLimit>
   /** What the Session has spent, as the runtime last restated it. */
   cost?: Cost
 }
@@ -71,6 +82,9 @@ export type Transcript = {
 export type Harness = Omit<HarnessFrame, 'kind'>
 export type ContextUsage = Omit<ContextFrame, 'kind'>
 export type RateLimit = Omit<RateLimitFrame, 'kind'>
+
+/** Where a rate-limit reading goes when the runtime did not say which limit it is. */
+export const UNNAMED_LIMIT = 'unnamed'
 export type Cost = Omit<CostFrame, 'kind'>
 
 /**

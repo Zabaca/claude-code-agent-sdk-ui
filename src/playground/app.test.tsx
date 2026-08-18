@@ -73,8 +73,12 @@ test('the harness the runtime reported is what the header shows', async () => {
 
   await drain(replay)
 
-  expect(screen.getByText('claude-opus-4')).toBeDefined()
-  expect(screen.getByText('/repo')).toBeDefined()
+  // Twice on screen now, and deliberately: the welcome box states what the
+  // runtime loaded once at the top, and the status line above the composer
+  // keeps the same facts where a terminal keeps them — which is what Claude
+  // Code itself does. `getByText` would fail on the pair, so this counts them.
+  expect(screen.getAllByText('claude-opus-4').length).toBe(2)
+  expect(screen.getAllByText('/repo').length).toBe(2)
   view.unmount()
 })
 

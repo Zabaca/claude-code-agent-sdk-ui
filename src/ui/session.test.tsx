@@ -743,9 +743,17 @@ test('the mode line reports what the runtime loaded, and is not a control', asyn
   const fake = fakeSse()
   const view = await mount(fake)
 
-  // Nothing said yet, so the composer shows the caller's default rather than
-  // claiming a mode the runtime never reported.
-  expect(screen.getByText('auto mode on')).toBeDefined()
+  // Nothing said yet, so the composer shows the default of the handler this
+  // package ships — which runs every tool without asking (ADR-0003), and says
+  // so rather than borrowing the milder `auto` the SDK separately has.
+  expect(screen.getByText('bypass permissions on')).toBeDefined()
+
+  await act(async () => {
+    fake.frame({ kind: 'harness', permissionMode: 'bypassPermissions' })
+  })
+  expect(screen.getByText('bypass permissions on')).toBeDefined()
+  // And it is drawn as the risk it is, not as one more mode in the cycle.
+  expect(colourOf(screen.getByText('bypass permissions on'))).toBe('var(--cc-mode-bypass)')
 
   await act(async () => {
     fake.frame({ kind: 'harness', permissionMode: 'plan' })
@@ -1589,6 +1597,11 @@ function statusOf(kind: string, at: number): string | undefined {
 
 function colourAt(kind: string, at: number): string {
   return marker(kind, at).style.color
+}
+
+/** The colour an element was actually drawn in. */
+function colourOf(found: HTMLElement): string {
+  return found.style.color
 }
 
 /** What a tool's collapsed line shows, minus what only a reader would hear. */

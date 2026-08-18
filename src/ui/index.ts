@@ -52,3 +52,4 @@ export {
 export { ClaudeThinking } from "./claude-thinking.tsx";
 export { ClaudeTodoList, type Todo } from "./claude-todo-list.tsx";
 export { ClaudeToolCall } from "./claude-tool-call.tsx";
+export { SessionStatus } from './status.tsx'

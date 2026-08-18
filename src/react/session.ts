@@ -113,7 +113,7 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   )
 
   const mode = useMemo(
-    () => modeOf(transcript.harness?.permissionMode) ?? options.mode ?? 'auto',
+    () => modeOf(transcript.harness?.permissionMode) ?? options.mode ?? 'bypass',
     [transcript.harness?.permissionMode, options.mode],
   )
 
@@ -151,7 +151,8 @@ export type AgentSessionOptions = {
   reasoning?: boolean
   /**
    * What the composer shows until the runtime has said what it loaded. The
-   * handler's own default is `bypassPermissions`, which is `auto` (ADR-0003).
+   * handler's own default is `bypassPermissions`, which the composer draws as
+   * `bypass` — its own mode, in red, saying what it costs (ADR-0003).
    */
   mode?: ClaudeMode
   /** What the composer's effort chip starts at. */
@@ -467,6 +468,11 @@ function settle(sent: Sent[], frame: Frame): Sent[] {
 function modeOf(permissionMode: string | undefined): ClaudeMode | undefined {
   switch (permissionMode) {
     case 'bypassPermissions':
+      // Its own mode, not `auto`. The SDK has an `auto` of its own and it is a
+      // milder thing; drawing bypass as auto told a person every tool was
+      // being checked in some fashion while none of them was (ADR-0003).
+      return 'bypass'
+    case 'auto':
       return 'auto'
     case 'acceptEdits':
       return 'accept-edits'
