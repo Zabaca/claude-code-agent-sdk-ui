@@ -1745,3 +1745,85 @@ function working(): string {
   }
   return text
 }
+
+test('a hook that hands back a wall of text is folded, not printed whole', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+  // What a `SessionStart` hook actually does: hand back everything it wants
+  // added to the context. One of ours returns the whole session summary, on a
+  // single line, as JSON — which is why counting newlines was no limit at all.
+  const wall = `{"additionalContext":"${'x'.repeat(4000)}"}`
+
+  await act(async () => {
+    fake.frame({
+      kind: 'hook',
+      id: 'hook-wall',
+      name: 'SessionStart:startup',
+      hookEvent: 'SessionStart',
+      status: 'success',
+      output: wall,
+    })
+  })
+
+  const drawn = document.querySelector<HTMLElement>('[data-divergence="hook"]')
+  const collapsed = drawn?.querySelector('summary')?.textContent ?? ''
+
+  // Breakage this fails on: the marker joining its details and printing them,
+  // which is what shipped — four thousand characters above the first prompt,
+  // with the Transcript somewhere below them.
+  expect(collapsed.length).toBeLessThan(300)
+  expect(collapsed).toContain('SessionStart:startup')
+  expect(collapsed).toContain('characters')
+
+  // Folded, not cut. A hook's own words are the only account of what it did,
+  // so the whole of it is still there — one click away rather than dropped.
+  expect(drawn?.textContent ?? '').toContain(wall)
+  view.unmount()
+})
+
+test('a marker short enough to read is left as the one line it is', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({
+      kind: 'hook',
+      id: 'hook-small',
+      name: 'format-on-edit',
+      hookEvent: 'PostToolUse',
+      status: 'success',
+      output: 'formatted 2 files',
+    })
+  })
+
+  // The common case must not grow a disclosure: a one-line hook that has to be
+  // clicked open to be read is worse than the wall this fixes.
+  const drawn = document.querySelector<HTMLElement>('[data-divergence="hook"]')
+  expect(drawn?.tagName).toBe('DIV')
+  expect(drawn?.querySelector('summary')).toBe(null)
+  expect(drawn?.textContent ?? '').toContain('formatted 2 files')
+  view.unmount()
+})
+
+test('a marker with many lines says how many are behind it', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({
+      kind: 'hook',
+      id: 'hook-lines',
+      name: 'lint',
+      hookEvent: 'PostToolUse',
+      status: 'error',
+      stderr: ['one', 'two', 'three', 'four'].join('\n'),
+    })
+  })
+
+  const drawn = document.querySelector<HTMLElement>('[data-divergence="hook"]')
+  const collapsed = drawn?.querySelector('summary')?.textContent ?? ''
+  expect(collapsed).toContain('+3 lines')
+  expect(collapsed).not.toContain('four')
+  expect(drawn?.textContent ?? '').toContain('four')
+  view.unmount()
+})

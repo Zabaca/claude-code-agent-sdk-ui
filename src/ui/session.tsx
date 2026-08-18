@@ -779,19 +779,56 @@ function Marker({
   status?: string
 }) {
   const said = details.filter((part): part is string => part !== undefined && part !== '')
+  const whole = said.join(' \u00b7 ')
+  const short = summarise(whole)
+  const marked = { 'data-divergence': kind, ...(status !== undefined ? { 'data-status': status } : {}) }
+
+  // Short enough to read at a glance: drawn as the one line it is.
+  if (short === whole) {
+    return (
+      <div
+        {...marked}
+        className="cc:flex cc:min-w-0 cc:flex-wrap cc:items-baseline cc:gap-2"
+        style={{ color: tone }}
+      >
+        <span aria-hidden>{glyph}</span>
+        <span className="cc:min-w-0">
+          {label}
+          {whole === '' ? null : ` \u2014 ${whole}`}
+        </span>
+      </div>
+    )
+  }
+
+  /*
+    Anything longer goes behind a disclosure, on the same terms a tool's output
+    does. A hook is where this bites: a `SessionStart` hook hands back whatever
+    it wants to add to the context — for one of ours, the entire session
+    summary — and printed whole it is a wall of text above the first prompt,
+    with the Transcript somewhere below it.
+
+    Nothing is dropped, because the detail is the point: a hook that refused
+    keeps its own words, which are the only account of why. It is folded, not
+    cut, and the whole of it is one click away.
+
+    "(click to expand)" rather than the tool line's "(ctrl+o to expand)": that
+    phrasing is Brainless mimicking the terminal, and no ctrl+o is bound here.
+    A hint that names a key nothing listens for is worse than a plain one.
+  */
   return (
-    <div
-      data-divergence={kind}
-      {...(status !== undefined ? { 'data-status': status } : {})}
-      className="cc:flex cc:min-w-0 cc:flex-wrap cc:items-baseline cc:gap-2"
-      style={{ color: tone }}
-    >
-      <span aria-hidden>{glyph}</span>
-      <span className="cc:min-w-0">
-        {label}
-        {said.length === 0 ? null : ` — ${said.join(' · ')}`}
-      </span>
-    </div>
+    <details {...marked} className="cc:group cc:min-w-0" style={{ color: tone }}>
+      <summary className="cc:flex cc:min-w-0 cc:cursor-pointer cc:flex-wrap cc:items-baseline cc:gap-2 cc:[&::-webkit-details-marker]:hidden">
+        <span aria-hidden>{glyph}</span>
+        <span className="cc:min-w-0">
+          {label}
+          {` \u2014 ${short}`}
+          <span className="cc:ml-2 cc:group-open:hidden" style={{ color: 'var(--cc-fg-dim)' }}>
+            (click to expand)
+          </span>
+        </span>
+      </summary>
+      <div className="cc:mt-1 cc:min-w-0 cc:whitespace-pre-wrap cc:break-words cc:pl-6">{whole}</div>
+    </details>
   )
 }
 
@@ -1093,11 +1130,33 @@ function argOf(input: Record<string, unknown>): string | undefined {
   return undefined
 }
 
+/**
+ * How wide a collapsed line may be before it is folded, in characters.
+ *
+ * Roughly what fits on one line of the column the playground draws in. The
+ * exact figure matters less than there being one: without it, "the first line"
+ * is no limit at all against output that has no newlines in it.
+ */
+const LINE_LIMIT = 160
+
 /** The collapsed line: the first line, and how much more is behind it. */
 function summarise(output: string): string {
   const lines = output.split('\n')
-  const first = lines[0] ?? ''
+  const first = clip(lines[0] ?? '')
   if (lines.length === 1) return first
   return `${first} +${lines.length - 1} lines`
+}
+
+/**
+ * One line, cut to length.
+ *
+ * Counting lines is not enough on its own: a hook that answers with a JSON
+ * blob, or a tool that prints a single enormous line, has exactly one — so
+ * "the first line" was the whole of it, and a screenful of text arrived where
+ * a summary was meant to be.
+ */
+function clip(line: string): string {
+  if (line.length <= LINE_LIMIT) return line
+  return `${line.slice(0, LINE_LIMIT)}\u2026 +${line.length - LINE_LIMIT} characters`
 }
 
