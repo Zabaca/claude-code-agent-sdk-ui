@@ -47,6 +47,15 @@ if (built < (await sources())) {
   }
 }
 
+/** The checked-out branch, or nothing at all outside a git working tree. */
+function branch(): string | undefined {
+  const read = Bun.spawnSync(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root })
+  if (read.exitCode !== 0) return undefined
+  const name = read.stdout.toString().trim()
+  // `HEAD` is what a detached checkout answers, and it names no branch.
+  return name === '' || name === 'HEAD' ? undefined : name
+}
+
 const agent = createAgentHandler({
   cwd: root,
   // Nothing else is named here on purpose. What runs is the host's to decide
@@ -60,6 +69,11 @@ const server = Bun.serve({
   routes: {
     '/': index,
     '/agent': (request) => agent(request),
+    // The status line's `git:(branch)`, which no Frame carries: the SDK
+    // reports a `cwd` and knows nothing about VCS. The playground knows
+    // because it is running inside the checkout, so it is the playground that
+    // says — the package still cannot invent one.
+    '/branch': () => Response.json({ branch: branch() }),
   },
 })
 

@@ -1840,3 +1840,39 @@ test('a marker with many lines says how many are behind it', async () => {
   expect(drawn?.textContent ?? '').toContain('four')
   view.unmount()
 })
+
+test('the status line sits under the field and over the mode line, with one effort', async () => {
+  const fake = fakeSse()
+  const view = await mount(fake)
+
+  await act(async () => {
+    fake.frame({ kind: 'harness', model: 'claude-opus-5[1m]', cwd: '/Users/you/Projects/ui' })
+    fake.frame({ kind: 'context', totalTokens: 310_000, maxTokens: 1_000_000, percentage: 31 })
+    fake.frame({ kind: 'rate-limit', limitType: 'five_hour', utilization: 4 })
+  })
+
+  const status = document.querySelector('[data-status-line]')
+  const line = status?.textContent ?? ''
+  expect(line).toContain('ui')
+  expect(line).toContain('[claude-opus-5[1m]]')
+  expect(line).toContain('effort: xhigh')
+  expect(line).toContain('[310.0k/1000k] 31%')
+  expect(line).toContain('| 5h:4%')
+
+  // Where a terminal keeps it: after the field, before the mode line. Ordering
+  // is what makes it a status line rather than a second header — and the mode
+  // line has to stay the last thing, because it is the thing that says what is
+  // about to happen to your machine.
+  const field = screen.getByLabelText('Prompt')
+  const mode = screen.getByText('bypass permissions on')
+  const order = document.body
+  expect(order.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_CONTAINED_BY).toBeTruthy()
+  expect(field.compareDocumentPosition(status as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect((status as Node).compareDocumentPosition(mode) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+  // And the figure appears once. The chip above the field is gone, because the
+  // status line carries it — two readouts of one number, inches apart and only
+  // one of them clickable, is worse than either alone.
+  expect(screen.queryAllByText(/xhigh/)).toHaveLength(1)
+  view.unmount()
+})

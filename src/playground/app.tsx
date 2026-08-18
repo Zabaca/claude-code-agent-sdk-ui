@@ -50,6 +50,11 @@ export function Playground({
     : { endpoint }
 
   const session = useAgentSession(options)
+  // The one fact on the status line that no Frame carries. The playground's
+  // own server reads it out of the checkout it is running in; a page that
+  // cannot reach it simply shows no branch, which is the same answer a
+  // checkout with no git in it gives.
+  const branch = useBranch()
   const harness = session.transcript.harness
 
   return (
@@ -59,6 +64,7 @@ export function Playground({
         <ClaudeSession
           session={session}
           placeholder={mode === 'replay' ? 'Ask replay anything' : 'Ask the agent anything'}
+          {...(branch === undefined ? {} : { branch })}
           header={
             <ClaudeHeader
               // Everything here is either what the runtime reported or a plain
@@ -90,6 +96,31 @@ export function Playground({
       </div>
     </div>
   )
+}
+
+/**
+ * The branch the playground is running in, asked for once.
+ *
+ * A fetch rather than something baked into the page, because the page is a
+ * static bundle and the branch changes under it — and a status line saying the
+ * branch you were on when the server started is worse than one saying nothing.
+ * Anything that goes wrong leaves it unsaid.
+ */
+function useBranch(): string | undefined {
+  const [branch, setBranch] = React.useState<string | undefined>(undefined)
+  React.useEffect(() => {
+    let live = true
+    void fetch('/branch')
+      .then((response) => (response.ok ? response.json() : undefined))
+      .then((body: { branch?: unknown } | undefined) => {
+        if (live && typeof body?.branch === 'string') setBranch(body.branch)
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [])
+  return branch
 }
 
 /**

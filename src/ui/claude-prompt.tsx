@@ -25,6 +25,12 @@
  *   - the field is a `textarea`, not an `input`, so shift+Enter opens a second
  *     line as the terminal's composer does. It is sized to its content rather
  *     than to `rows`, and Enter still sends.
+ *   - a `status` slot between the field and the mode line, and an
+ *     `effortChip` flag. Both exist for one line: Claude Code's status line
+ *     sits exactly there, and it carries the effort — so a host that draws one
+ *     needs somewhere to put it and a way not to show the figure twice.
+ *     `effortChip={false}` hides the chip without dropping `effort`, which
+ *     still paints the ultracode rules. Offered upstream
  *   - a `bypass` mode, which upstream has no drawing for. The runtime this
  *     package hosts defaults to `bypassPermissions` (ADR-0003), and drawing it
  *     as `auto` said a milder thing than what was running — milder still
@@ -155,6 +161,8 @@ export function ClaudePrompt({
   placeholder = "",
   mode = "auto",
   effort = "xhigh",
+  effortChip = true,
+  status,
   className,
   inputClassName,
 }: {
@@ -172,6 +180,17 @@ export function ClaudePrompt({
   mode?: ClaudeMode;
   /** Effort chip above the prompt. Pass `false` to hide. */
   effort?: ClaudeEffort | false;
+  /**
+   * Draw the effort chip. `false` keeps the effort — it still paints the
+   * ultracode rules — while leaving the chip off, for a host that shows the
+   * figure somewhere else and does not want it twice.
+   */
+  effortChip?: boolean;
+  /**
+   * A line between the field and the mode line, where Claude Code keeps its
+   * status line. Anything, or nothing.
+   */
+  status?: React.ReactNode;
   className?: string;
   inputClassName?: string;
 }) {
@@ -221,7 +240,7 @@ export function ClaudePrompt({
     }
   }
 
-  const effortChip = e ? (
+  const chip = e ? (
     <span className="cc:min-w-0 cc:break-words cc:text-right">
       <span aria-hidden>{e.glyph}</span> {e.label}
     </span>
@@ -246,7 +265,7 @@ export function ClaudePrompt({
         className,
       )}
     >
-      {e ? (
+      {e && effortChip ? (
         <div
           className="cc:flex cc:justify-end cc:px-1 cc:pb-1 cc:text-[12px]"
           style={{ color: "var(--cc-muted)" }}
@@ -257,10 +276,10 @@ export function ClaudePrompt({
               className={cn(CONTROL, "cc:min-w-0 cc:cursor-pointer cc:text-right")}
               onClick={() => onEffortChange(next(EFFORT_CYCLE, effort))}
             >
-              {effortChip}
+              {chip}
             </button>
           ) : (
-            effortChip
+            chip
           )}
         </div>
       ) : null}
@@ -319,6 +338,8 @@ export function ClaudePrompt({
           }
         />
       </div>
+
+      {status === undefined ? null : <div className="cc:mt-1.5 cc:min-w-0">{status}</div>}
 
       <div className="cc:mt-1.5 cc:min-w-0 cc:break-words cc:px-1 cc:text-[12px]">
         {onModeChange ? (

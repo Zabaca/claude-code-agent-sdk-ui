@@ -77,8 +77,14 @@ test('the harness the runtime reported is what the header shows', async () => {
   // runtime loaded once at the top, and the status line above the composer
   // keeps the same facts where a terminal keeps them — which is what Claude
   // Code itself does. `getByText` would fail on the pair, so this counts them.
-  expect(screen.getAllByText('claude-opus-4').length).toBe(2)
-  expect(screen.getAllByText('/repo').length).toBe(2)
+  expect(screen.getByText('claude-opus-4')).toBeDefined()
+  expect(screen.getByText('/repo')).toBeDefined()
+  // And the status line under the composer says the same two facts in the
+  // shorthand a status line uses: the directory by its name, the model in
+  // brackets. Same source, drawn twice, exactly as the terminal does it.
+  const status = document.querySelector('[data-status-line]')?.textContent ?? ''
+  expect(status).toContain('repo')
+  expect(status).toContain('[claude-opus-4]')
   view.unmount()
 })
 
@@ -154,3 +160,38 @@ async function drain(replay: ReplayTransport): Promise<void> {
 function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
+
+test('the branch comes from the host, and its absence is silent', async () => {
+  // No Frame carries a branch, so the playground asks its own server — which
+  // is the only party that knows, being the one running inside the checkout.
+  const original = globalThis.fetch
+  globalThis.fetch = ((url: unknown) =>
+    String(url) === '/branch'
+      ? Promise.resolve(new Response(JSON.stringify({ branch: 'ticket/9' })))
+      : Promise.resolve(new Response(null, { status: 404 }))) as unknown as typeof globalThis.fetch
+
+  try {
+    const replay = replayTransport({ wait: immediately, script: SCRIPT })
+    const view = render(<Playground mode="replay" transport={replay} />)
+    await drain(replay)
+    expect(screen.getAllByText('git:(ticket/9)')[0]).toBeDefined()
+    view.unmount()
+  } finally {
+    globalThis.fetch = original
+  }
+
+  // And where the host cannot say — no git, or a server that does not answer —
+  // the line simply has no branch on it. A default of "main" would be the
+  // playground stating a fact it does not have.
+  globalThis.fetch = (() =>
+    Promise.resolve(new Response(null, { status: 404 }))) as unknown as typeof globalThis.fetch
+  try {
+    const replay = replayTransport({ wait: immediately, script: SCRIPT })
+    const view = render(<Playground mode="replay" transport={replay} />)
+    await drain(replay)
+    expect(document.querySelector('[data-status-line]')?.textContent ?? '').not.toContain('git:')
+    view.unmount()
+  } finally {
+    globalThis.fetch = original
+  }
+})

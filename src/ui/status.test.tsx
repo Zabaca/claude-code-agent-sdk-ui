@@ -23,11 +23,13 @@ test('the two meters are drawn side by side, and never blended', () => {
     { kind: 'rate-limit', limitType: 'seven_day', utilization: 9 },
   )
 
-  expect(said).toContain('claude-opus-5[1m]')
-  expect(said).toContain('…/zabaca/ui')
-  expect(said).toContain('260k/1000k 26%')
-  expect(said).toContain('5h: 2%')
-  expect(said).toContain('wk: 9%')
+  expect(said).toContain('[claude-opus-5[1m]]')
+  // The directory by the name a person calls it, as a shell prompt shows it —
+  // the whole path is on the welcome box a few lines above.
+  expect(said).toContain('ui')
+  expect(said).not.toContain('/Users/you')
+  expect(said).toContain('[260.0k/1000k] 26%')
+  expect(said).toContain('| 5h:2% wk:9%')
 })
 
 test('both limits survive each other, because each has its own slot', () => {
@@ -42,8 +44,8 @@ test('both limits survive each other, because each has its own slot', () => {
   )
 
   // The newer five-hourly reading, and the weekly still there beside it.
-  expect(said).toContain('5h: 3%')
-  expect(said).toContain('wk: 9%')
+  expect(said).toContain('5h:3%')
+  expect(said).toContain('wk:9%')
   expect(said).not.toContain('2%')
 })
 
@@ -52,7 +54,7 @@ test('a limit this build has not heard of keeps the name the runtime gave it', (
   // this build has never seen still reads. Inventing a label, or dropping the
   // reading, would both be worse than the runtime's own word for it.
   expect(line({ kind: 'rate-limit', limitType: 'seven_day_pluto', utilization: 40 })).toBe(
-    'seven_day_pluto: 40%',
+    '| seven_day_pluto:40%',
   )
 })
 
@@ -65,20 +67,32 @@ test('nothing the runtime has not said is drawn, and an empty line is no line', 
 
   // Half-reported is half-drawn: a window with no maximum shows what is in it
   // and does not divide by a number nobody sent.
-  expect(line({ kind: 'context', totalTokens: 91_500 })).toBe('91.5k')
+  expect(line({ kind: 'context', totalTokens: 91_500 })).toBe('[91.5k]')
 })
 
-test('the effort is the composer chip, unless a host asks for it here', () => {
-  // Two readouts of the same figure inches apart — one of them clickable — is
-  // worse than one, so this stays out of the line by default.
-  render(<SessionStatus transcript={reduce([{ kind: 'context', totalTokens: 1000 }])} />)
-  expect(screen.queryByText(/effort/)).toBe(null)
+test('the effort reads as a control only where it is one', () => {
+  // Drawn here because Claude Code's status line carries it — but it is only
+  // a control where something is listening, and a control that changes what
+  // the line says without changing what runs is the mode line's mistake.
+  render(<SessionStatus transcript={reduce([])} effort="high" />)
+  expect(screen.getByText(/effort: high/)).toBeDefined()
+  expect(screen.queryByRole('button')).toBe(null)
 
+  const cycled: string[] = []
   render(
-    <SessionStatus
-      transcript={reduce([{ kind: 'context', totalTokens: 1000 }])}
-      effort="high"
-    />,
+    <SessionStatus transcript={reduce([])} effort="high" onEffortChange={() => cycled.push('x')} />,
   )
-  expect(screen.getByText('effort: high')).toBeDefined()
+  const control = screen.getAllByRole('button')[0]
+  expect(control).toBeDefined()
+  control?.click()
+  expect(cycled).toEqual(['x'])
+})
+
+test('a branch is drawn only when a host gives one', () => {
+  // Nothing here can work one out: the SDK reports a `cwd` and knows nothing
+  // about VCS. Inventing "main" would be the status line making up the fact it
+  // exists to report.
+  expect(line({ kind: 'harness', cwd: '/repo' })).toBe('repo')
+  render(<SessionStatus transcript={reduce([{ kind: 'harness', cwd: '/repo' }])} branch="main" />)
+  expect(screen.getAllByText('git:(main)')[0]).toBeDefined()
 })

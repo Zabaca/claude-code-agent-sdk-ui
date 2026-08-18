@@ -20,7 +20,8 @@ import type { RecalledMemory } from '../core/frame.ts'
 import type { AgentSession } from '../react/session.ts'
 import { ClaudeDiff } from './claude-diff.tsx'
 import { ClaudeMessage } from './claude-message.tsx'
-import { ClaudePrompt } from './claude-prompt.tsx'
+import type { ClaudeEffort } from '../core/composer.ts'
+import { ClaudePrompt, EFFORT_CYCLE } from './claude-prompt.tsx'
 import { ClaudeThinking } from './claude-thinking.tsx'
 import { ClaudeTodoList } from './claude-todo-list.tsx'
 import { ClaudeToolCall } from './claude-tool-call.tsx'
@@ -53,6 +54,7 @@ export function ClaudeSession({
   session,
   header,
   placeholder = 'Try "fix the flaky test"',
+  branch,
   threads = 'inline',
   clock,
   className,
@@ -65,6 +67,13 @@ export function ClaudeSession({
    */
   header?: React.ReactNode
   placeholder?: string
+  /**
+   * The checked-out branch, for the status line. A prop because no Frame
+   * carries one — the SDK reports a `cwd` and knows nothing about VCS — so a
+   * host that knows the branch is the only thing that can say it, and a
+   * component that made one up would be inventing the fact it reports.
+   */
+  branch?: string
   /**
    * Where a Thread's Messages go: in Transcript order, grouped under the `Task`
    * call that opened them, or left out. The Transcript is flat precisely so
@@ -199,11 +208,6 @@ export function ClaudeSession({
         </div>
       ) : null}
 
-      {/* The Session's meters, where a terminal keeps its status line: above
-          the composer, and drawn from what the runtime reported rather than
-          from anything worked out here. */}
-      <SessionStatus transcript={transcript} />
-
       <SlashMenu commands={offered} active={active} onHighlight={setHighlighted} />
 
       <Attachments
@@ -299,7 +303,18 @@ export function ClaudeSession({
           placeholder={placeholder}
           mode={session.mode}
           effort={session.effort}
-          onEffortChange={session.setEffort}
+          // The figure moves to the status line below the field, where Claude
+          // Code keeps it. `effort` stays passed so ultracode still paints the
+          // rules; what goes is the second copy of the same number.
+          effortChip={false}
+          status={
+            <SessionStatus
+              transcript={transcript}
+              effort={session.effort}
+              onEffortChange={() => session.setEffort(nextEffort(session.effort))}
+              {...(branch === undefined ? {} : { branch })}
+            />
+          }
           // `onModeChange` is deliberately left unset, which is what makes the
           // mode line inert chrome. `session.mode` is what the runtime reported
           // having loaded, and ADR-0001 is enforced by the wire rather than
@@ -426,6 +441,11 @@ function Refused({ types }: { types: string[] }) {
  * Nothing focused, or something with no cursor in it, gets `undefined` and the
  * marker goes at the end.
  */
+function nextEffort(effort: ClaudeEffort): ClaudeEffort {
+  const at = EFFORT_CYCLE.indexOf(effort)
+  return EFFORT_CYCLE[(at + 1) % EFFORT_CYCLE.length] as ClaudeEffort
+}
+
 function caretIn(target: EventTarget | null): number | undefined {
   const at = (target as { selectionStart?: unknown } | null)?.selectionStart
   return typeof at === 'number' ? at : undefined
