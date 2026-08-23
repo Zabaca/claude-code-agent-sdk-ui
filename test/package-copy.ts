@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { cpSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
@@ -124,6 +124,14 @@ export function buildPackage(name: string): PackageCopy {
  * complaint is that others write to it. Comparing before with after mutates
  * nothing and holds whether or not a human has run `bun run build` here.
  *
+ * **It walks the contents, and the first version did not.** `statSync` on the
+ * directory answers for the directory *inode*, whose mtime moves when an entry
+ * is created or removed and **not** when an existing file is overwritten. So a
+ * `build:css` writing over a `dist/styles.css` that was already there changed
+ * nothing this could see: mutating `buildStylesheet` back to building in the
+ * tree survived the whole suite. Caught by the mutation batch and not by
+ * reading, which is the entire argument for running one.
+ *
  * `absent` is a normal answer, not a failure — after this fix nothing in the
  * suite creates `dist/` at all, so a clean checkout that has only ever run the
  * tests has none.
@@ -137,10 +145,19 @@ export function buildPackage(name: string): PackageCopy {
  * path this whole file exists to stop the suite writing to.
  */
 export function sharedDistState(at: string = join(root, 'dist')): string {
+  const entries: string[] = []
+  const walk = (dir: string, prefix: string): void => {
+    for (const name of readdirSync(dir).sort()) {
+      const path = join(dir, name)
+      const found = statSync(path)
+      if (found.isDirectory()) walk(path, `${prefix}${name}/`)
+      else entries.push(`${prefix}${name}:${found.mtimeMs}:${found.size}`)
+    }
+  }
   try {
-    const found = statSync(at)
-    return `${found.mtimeMs}:${found.size}`
+    walk(at, '')
   } catch {
     return 'absent'
   }
+  return entries.length === 0 ? 'empty' : entries.join('\n')
 }

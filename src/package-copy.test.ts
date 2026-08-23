@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { NOT_COPIED, installedModules, packageCopy, sharedDistState } from '../test/package-copy.ts'
@@ -98,6 +98,25 @@ describe('sharedDistState recognises something', () => {
     const copy = packageCopy('state-present')
     try {
       expect(sharedDistState(copy.dir)).not.toBe('absent')
+    } finally {
+      copy.remove()
+    }
+  }, 60_000)
+
+  test('a file overwritten in place changes the reading', () => {
+    // The hole the mutation batch found, and the reason this walks the contents
+    // rather than stat-ing the directory. A directory's own mtime moves when an
+    // entry is created or removed and NOT when an existing file is written
+    // over, so `build:css` rewriting a `styles.css` that was already there was
+    // invisible — and `buildStylesheet` building in the tree survived the whole
+    // suite. Nothing here is about `dist/` specifically; it is about whether
+    // this function can see a write at all.
+    const copy = packageCopy('state-overwrite')
+    try {
+      writeFileSync(join(copy.dir, 'probe.txt'), 'before')
+      const before = sharedDistState(copy.dir)
+      writeFileSync(join(copy.dir, 'probe.txt'), 'after, and longer')
+      expect(sharedDistState(copy.dir)).not.toBe(before)
     } finally {
       copy.remove()
     }
