@@ -10,7 +10,7 @@ const DEFAULT_FG = "#c0caf5";
 
 beforeAll(async () => {
   const style = document.createElement("style");
-  style.textContent = flattenLayers(await buildStylesheet());
+  style.textContent = flattenLayers((await buildStylesheet()).css);
   document.head.appendChild(style);
 });
 

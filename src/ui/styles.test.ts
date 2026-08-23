@@ -22,11 +22,15 @@ async function utilitiesUsed(): Promise<Set<string>> {
 }
 
 let css = "";
+/** Where the build actually ran. See `Built` in `test/build-css.ts`. */
+let builtIn = "";
 /** Backslash escapes removed, so a selector can be searched for as written. */
 let flat = "";
 
 beforeAll(async () => {
-  css = await buildStylesheet();
+  const built = await buildStylesheet()
+  css = built.css
+  builtIn = built.builtIn;
   flat = css.replaceAll("\\", "");
 });
 
@@ -112,6 +116,16 @@ describe("the vendored sources", () => {
     expect(files.filter((f) => f.includes("permission"))).toEqual([]);
   });
 });
+
+test('the stylesheet is built outside the working tree, not in it', () => {
+  // The order-independent half, and the one that actually holds. Tailwind does
+  // not rewrite an output whose content is unchanged, so on a checkout that
+  // already has a matching `dist/styles.css` a build into the tree moves no
+  // mtime and the fingerprint below sees nothing. Where the build ran is not
+  // subject to that: it is either inside this package or it is not.
+  expect(builtIn).not.toBe('')
+  expect(builtIn.startsWith(ROOT)).toBe(false)
+})
 
 test("building the stylesheet leaves the package's own dist/ exactly as it found it", () => {
   // Two suites in one working tree used to fight over this path: `build:js`

@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { cpSync, lstatSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
@@ -149,7 +149,12 @@ export function sharedDistState(at: string = join(root, 'dist')): string {
   const walk = (dir: string, prefix: string): void => {
     for (const name of readdirSync(dir).sort()) {
       const path = join(dir, name)
-      const found = statSync(path)
+      // `lstat`, so a symlink is an entry rather than a door. A copy's
+      // `node_modules` is a link to the real one, and following it walked
+      // every installed package on the machine — slow, and a fingerprint that
+      // moves whenever anything at all writes under `node_modules`, which made
+      // this guard's own result differ between two runs of the same mutation.
+      const found = lstatSync(path)
       if (found.isDirectory()) walk(path, `${prefix}${name}/`)
       else entries.push(`${prefix}${name}:${found.mtimeMs}:${found.size}`)
     }

@@ -11,18 +11,36 @@ import { packageCopy } from "./package-copy.ts";
  * command is the thing under test, and a test that reassembles it is a test of
  * the reassembly.
  */
-export async function buildStylesheet(): Promise<string> {
+export async function buildStylesheet(): Promise<Built> {
   const copy = packageCopy("styles");
   try {
     const build = Bun.spawnSync(["bun", "run", "build:css"], { cwd: copy.dir });
     if (build.exitCode !== 0) {
       throw new Error(`build:css failed: ${build.stderr.toString()}`);
     }
-    return await Bun.file(`${copy.dir}/dist/styles.css`).text();
+    const css = await Bun.file(`${copy.dir}/dist/styles.css`).text();
+    return { css, builtIn: copy.dir };
   } finally {
     copy.remove();
   }
 }
+
+/**
+ * The stylesheet, and where it was built.
+ *
+ * `builtIn` is reported for one reason: it is the only order-independent way to
+ * observe that the build did not happen in the working tree. The obvious check
+ * — fingerprint `dist/` before and after — cannot see this particular write,
+ * because **the Tailwind CLI does not rewrite an output whose content is
+ * unchanged** (measured: two runs 1.1s apart left `mtime` identical). So on any
+ * checkout that already has a matching `dist/styles.css`, a build into the tree
+ * is invisible to a content fingerprint, and the mutation putting it back
+ * survived the whole suite. The directory it wrote in is not invisible.
+ *
+ * The path is already removed by the time a caller sees it. It is evidence
+ * about where the work happened, not a directory to go and read.
+ */
+export type Built = { css: string; builtIn: string };
 
 /**
  * happy-dom does not implement `@layer`, so rules inside one never match when
