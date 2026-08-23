@@ -32,7 +32,16 @@ beforeAll(async () => {
   css = built.css
   builtIn = built.builtIn;
   flat = css.replaceAll("\\", "");
-});
+
+  // Bounded rather than left on bun's 5000ms default, for the reason
+  // `package.test.ts` records: a hook that spawns a build and times out takes
+  // its whole file down as one unnamed failure. This build measures 172ms, so
+  // the margin here was never tight — but the bound is now a figure somebody
+  // chose for work that starts a process, not a default meant for a hook that
+  // assigns a variable. The asymmetry decides the size: a hook killed early
+  // costs a batch and a wrong finding, a hook that genuinely hangs costs a
+  // minute.
+}, 60_000);
 
 describe("the built stylesheet", () => {
   test("carries every utility the vendored components ask for", async () => {
