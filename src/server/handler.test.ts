@@ -4,7 +4,8 @@ import { readdir } from 'node:fs/promises'
 import type { ClassifyInput } from '../core/classify.ts'
 import { decodeEvents } from '../core/wire.ts'
 import { fakeQuery } from './fake.ts'
-import { createAgentHandler, type AgentQueryFactory } from './handler.ts'
+import type { Frame } from '../core/frame.ts'
+import { createAgentHandler, type AgentQueryFactory, type FrameLog } from './handler.ts'
 
 test('a Session streams Frames over SSE, each event carrying its index as id', async () => {
   const fake = fakeQuery()
@@ -1033,3 +1034,115 @@ test('a session with no subscription reports no limits, rather than limits of ze
   expect(events.some((event) => event.data['kind'] === 'rate-limit')).toBe(false)
   expect(events.some((event) => event.data['kind'] === 'context')).toBe(true)
 })
+
+/**
+ * **A log that outlives the process that wrote it.**
+ *
+ * A Session's Frames live in memory here, which is right for a library that
+ * cannot know where a host keeps things — and wrong for every host that
+ * restarts. Measured on the consumer that found it: the server is a systemd
+ * unit behind an apply, so ANY deploy restarts it, and a reconnecting reader
+ * got an empty conversation while the agent, holding a resumed Session id,
+ * answered as though the conversation were still running. Two readings of one
+ * system, disagreeing, neither reported.
+ *
+ * So the log becomes injectable, exactly as `resume` already makes the Session
+ * id injectable — the two are halves of the same idea, and a host that persists
+ * one and not the other gets an agent that remembers and a screen that does
+ * not.
+ *
+ * The interface is `read`/`append` rather than a whole-array setter, because
+ * appending is what actually happens and a setter invites a host to rewrite
+ * history it did not author. No file handling here: a library that picks a
+ * storage medium picks it for every consumer.
+ */
+test('a Session seeded with a log replays it to the first reader', async () => {
+  const fake = fakeQuery()
+  const before: Frame[] = [
+    { kind: 'prompt', text: 'what did we say' },
+    { kind: 'text', text: 'this much', thread: 'main' },
+  ]
+  const handler = createAgentHandler({ createQuery: fake.createQuery, log: memoryLog(before) })
+
+  const stream = await handler(open())
+  const events = await read(stream, 2)
+
+  expect(events.map((event) => event.id)).toEqual(['0', '1'])
+  expect(events.map((event) => event.data['kind'])).toEqual(['prompt', 'text'])
+})
+
+test('Frames the Session retains are appended to the log, in order', async () => {
+  const fake = fakeQuery()
+  const log = memoryLog([])
+  const handler = createAgentHandler({ createQuery: fake.createQuery, log })
+
+  await handler(open())
+  await handler(prompt('hello'))
+  fake.say(init('session-abc'))
+  fake.say(settled())
+  await read(await handler(open()), 1)
+
+  expect(log.read().length).toBeGreaterThan(0)
+  expect(log.read()[0]?.kind).toBe('prompt')
+})
+
+test('a seeded log continues its numbering rather than restarting it', async () => {
+  // The id IS the index, and `Last-Event-ID` resumes from it. A restored log
+  // that numbered from zero again would hand a reconnecting reader ids it had
+  // already seen, and the reader would drop the new Frames as replays.
+  const fake = fakeQuery()
+  const log = memoryLog([{ kind: 'prompt', text: 'earlier' }])
+  const handler = createAgentHandler({ createQuery: fake.createQuery, log })
+
+  await handler(open())
+  await handler(prompt('later'))
+  const events = await read(await handler(open()), 2)
+
+  expect(events.map((event) => event.id)).toEqual(['0', '1'])
+  expect(events[1]?.data['text']).toBe('later')
+})
+
+test('the host’s own array is not adopted, and not mutated behind its back', async () => {
+  // Registered as an expected survivor in the batch that found it: nothing
+  // tested the copy, and the cost of not copying was not theoretical. When the
+  // Session held the host's array directly, every retained Frame arrived in the
+  // host's storage without `append` ever running — so the test for `append`
+  // passed against a handler that had none. A seam whose contract is "call me"
+  // must not also work by accident.
+  const fake = fakeQuery()
+  const held: Frame[] = [{ kind: 'prompt', text: 'earlier' }]
+  const appended: Frame[] = []
+  const handler = createAgentHandler({
+    createQuery: fake.createQuery,
+    log: { read: () => held, append: (frame) => void appended.push(frame) },
+  })
+
+  await handler(open())
+  await handler(prompt('later'))
+  await read(await handler(open()), 2)
+
+  expect(held).toHaveLength(1)
+  expect(appended.map((f) => f.kind)).toContain('prompt')
+})
+
+test('no log at all is the ordinary case and stays in memory', async () => {
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  await handler(open())
+  await handler(prompt('hello'))
+  const events = await read(await handler(open()), 1)
+
+  expect(events[0]?.data['kind']).toBe('prompt')
+})
+
+/** The shape a host implements; the library ships no storage of its own. */
+function memoryLog(seed: Frame[]): FrameLog {
+  const held = [...seed]
+  // A COPY from `read`, which is what a real host does — `fileFrameLog` parses
+  // a file and hands back a fresh array every time. Returning the internal one
+  // made this helper alias the Session's own log, so Frames arrived in it
+  // whether or not `append` was ever called, and the test below passed against
+  // a handler that had no `append` at all.
+  return { read: () => [...held], append: (frame) => void held.push(frame) }
+}
