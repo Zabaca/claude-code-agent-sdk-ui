@@ -122,6 +122,22 @@ describe('sharedDistState recognises something', () => {
     }
   }, 60_000)
 
+  test('it does not walk through a symlink into whatever it points at', () => {
+    // A copy's `node_modules` is a link to the real one. Followed, the walk
+    // descends into every installed package on the machine — slow, and a
+    // reading that moves whenever anything at all writes under `node_modules`,
+    // which is how this guard came to answer differently for the same mutation
+    // in two runs. A link is an entry, not a door.
+    const copy = packageCopy('state-symlink')
+    try {
+      const reading = sharedDistState(copy.dir)
+      expect(reading).toContain('node_modules')
+      expect(reading).not.toContain('node_modules/')
+    } finally {
+      copy.remove()
+    }
+  }, 60_000)
+
   test('and the two readings differ, which is the whole of what it is for', () => {
     const copy = packageCopy('state-differs')
     try {
