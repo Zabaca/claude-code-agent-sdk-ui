@@ -113,7 +113,7 @@ describe("the vendored sources", () => {
   });
 });
 
-test("it leaves the package's own dist/ exactly as it found it", () => {
+test("building the stylesheet leaves the package's own dist/ exactly as it found it", () => {
   // Two suites in one working tree used to fight over this path: `build:js`
   // opens with `rm -rf dist`, and one run's deletion landed inside another's
   // window. Every build in this suite now happens in a disposable copy, and
