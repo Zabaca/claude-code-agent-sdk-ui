@@ -33,7 +33,21 @@ let consumer: Consumer
 
 beforeAll(async () => {
   consumer = await installPacked()
-})
+  // **180_000, the same bound every test in this file already declares** — and
+  // it is the same work, which is the whole point. `installPacked` runs
+  // `npm pack` → `prepack` → a full TypeScript and Tailwind build: measured at
+  // 1695ms on a quiet box, against bun's 5000ms default for a hook. A margin of
+  // 2.9x, which a contended box crosses.
+  //
+  // It did, four times (`agent-lab/31`). A hook that times out takes **every
+  // test in its file** with it and reports one `(fail) (unnamed)` with no name
+  // to look up — so the eight tests below simply stopped existing, twice taking
+  // a mutation batch's *control* with them, and the suite reported seven fewer
+  // rather than eight because the hook failure is itself counted as one.
+  //
+  // The tell was that the tests here were already given three minutes and the
+  // expensive half was left on the default nobody had thought about.
+}, 180_000)
 
 afterAll(async () => {
   await consumer?.remove()
