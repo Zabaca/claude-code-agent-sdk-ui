@@ -1,6 +1,12 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { Glob } from "bun";
 import { buildStylesheet } from "../../test/build-css.ts";
+import { sharedDistState } from '../../test/package-copy.ts'
+
+// Taken at import, before any `beforeAll` — so it is the state this file
+// inherited rather than one it made. See `sharedDistState` for why the
+// property is asserted here rather than in a guard of its own.
+const distBefore = sharedDistState()
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 
@@ -106,3 +112,11 @@ describe("the vendored sources", () => {
     expect(files.filter((f) => f.includes("permission"))).toEqual([]);
   });
 });
+
+test("it leaves the package's own dist/ exactly as it found it", () => {
+  // Two suites in one working tree used to fight over this path: `build:js`
+  // opens with `rm -rf dist`, and one run's deletion landed inside another's
+  // window. Every build in this suite now happens in a disposable copy, and
+  // this is the half of that which can fail.
+  expect(sharedDistState(), 'a build in this file wrote the shared dist/').toBe(distBefore)
+})

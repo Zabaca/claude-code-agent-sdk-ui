@@ -3,6 +3,8 @@ import { mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
+import { packageCopy } from './package-copy.ts'
+
 /**
  * A fresh project, somewhere else on disk, that has installed the tarball.
  *
@@ -15,6 +17,13 @@ import { dirname, join } from 'node:path'
  *
  * No registry is contacted. `npm pack` writes a local tarball and runs
  * `prepack`, which is the same build `npm publish` would run.
+ *
+ * That build is why the pack happens in a **copy** of the package rather than
+ * in the tree: `prepack` is `bun run build`, and `build:js` opens with
+ * `rm -rf dist`. Run beside a second suite in the same working tree, that
+ * deletion lands inside the other run's window and a tarball ships without its
+ * build. See `package-copy.ts` for why the fix is to stop sharing the path
+ * rather than to order the writes.
  */
 
 const root = new URL('../', import.meta.url).pathname
@@ -22,6 +31,16 @@ const root = new URL('../', import.meta.url).pathname
 export type Consumer = {
   /** The project directory, outside the repo. */
   dir: string
+  /**
+   * The extracted package inside it — the shipped bytes, on disk.
+   *
+   * Exposed so a guard about the tarball's *contents* can read the tarball
+   * rather than the working tree's `dist/`. Reading the tree was an
+   * approximation that held only because `npm pack` used to build the tree's
+   * `dist/` on its way past; once the pack moved into a copy it stopped
+   * holding, which is the same shared-path defect one layer on.
+   */
+  installed: string
   /** Everything in the tarball, as paths relative to the package root. */
   ships: Set<string>
   /** Writes a file into the project. */
@@ -49,11 +68,19 @@ function packageDir(name: string): string {
 /** Packs the repo and installs the tarball into a temp project. */
 export async function installPacked(): Promise<Consumer> {
   const dir = mkdtempSync(join(tmpdir(), 'cc-agent-sdk-ui-consumer-'))
-  const pack = Bun.spawnSync(['npm', 'pack', '--pack-destination', dir, '--json'], { cwd: root })
-  if (pack.exitCode !== 0) throw new Error(`npm pack failed: ${pack.stderr.toString()}`)
-  const [packed] = JSON.parse(pack.stdout.toString()) as [
-    { filename: string; files: { path: string }[] },
-  ]
+  const source = packageCopy('pack')
+  let packed: { filename: string; files: { path: string }[] }
+  try {
+    const pack = Bun.spawnSync(['npm', 'pack', '--pack-destination', dir, '--json'], {
+      cwd: source.dir,
+    })
+    if (pack.exitCode !== 0) throw new Error(`npm pack failed: ${pack.stderr.toString()}`)
+    ;[packed] = JSON.parse(pack.stdout.toString()) as [
+      { filename: string; files: { path: string }[] },
+    ]
+  } finally {
+    source.remove()
+  }
 
   const installed = join(dir, 'node_modules', '@zabaca', 'claude-code-agent-sdk-ui')
   await mkdir(installed, { recursive: true })
@@ -71,6 +98,7 @@ export async function installPacked(): Promise<Consumer> {
 
   return {
     dir,
+    installed,
     ships: new Set(packed.files.map((file) => file.path)),
     write: (name, content) => Bun.write(join(dir, name), content).then(() => undefined),
     run: (command) => {
