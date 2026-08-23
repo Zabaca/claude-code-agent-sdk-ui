@@ -31,9 +31,26 @@ const root = new URL('../', import.meta.url).pathname
 
 let consumer: Consumer
 
+// **A minute, not bun's five seconds.** `installPacked` runs `npm pack` and
+// then installs the tarball into a scratch project — seconds of real work on an
+// idle box, and well past the default on a busy one. bun's 5000ms hook timeout
+// is a bound for unit-test setup, and this is not that.
+//
+// The failure it produced was not a slow test, which would have been survivable.
+// A timed-out `beforeAll` reports ONE failure that bun prints as
+// `(fail) (unnamed)` — no test name, because no test ran — and the file's other
+// tests are never collected. This file holds 8, so the suite's total fell by
+// exactly 7 while a single anonymous failure appeared. That signature invalidated
+// four mutation batteries in agent-lab, twice by taking down the CONTROL, which
+// is the run that certifies the tree was green before any patch. A battery whose
+// control mismatched proves nothing about any of its mutations.
+//
+// Reproduced rather than inferred: `--timeout 1` against this file prints
+// `(fail) (unnamed)` and `Ran 1 test` where there are 8, and the same flag
+// against a file with no hook changes nothing.
 beforeAll(async () => {
   consumer = await installPacked()
-})
+}, 60_000)
 
 afterAll(async () => {
   await consumer?.remove()
