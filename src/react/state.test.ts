@@ -3,6 +3,7 @@ import { expect, test } from 'bun:test'
 import type { Frame } from '../core/frame.ts'
 import type { PartialKind, PartialText } from '../core/partial.ts'
 import { reduce } from '../core/reduce.ts'
+import type { Transcript } from '../core/transcript.ts'
 import { type Arrival, initial, mark, type SessionState, step, transcriptOf } from './session.ts'
 
 /**
@@ -108,6 +109,14 @@ function generate(seed: number): Script {
   const partial = (of: Block, done?: true): void => {
     const body: PartialText = {
       block: of.block,
+      // One long Message, whose blocks are numbered right through it. That is
+      // what a monotonic block index *is*, so saying so is the honest reading
+      // rather than a simplification — and it leaves the case where a Message
+      // numbers its blocks from 0 again to the examples at the foot of this
+      // file, which is where it belongs: it needs two blocks that are the same
+      // block by every name the wire has, which no generator with a running
+      // counter can produce.
+      message: 0,
       kind: of.kind,
       text: of.text,
       ...(done === undefined ? {} : { done }),
@@ -187,12 +196,20 @@ function generate(seed: number): Script {
     const one = open[at]
     if (!one) return
     open.splice(at, 1)
-    partial({ ...one }, true)
+    // The close can be overtaken by its own Frame. They are separate things the
+    // runtime yields — a `stream_event` and the `assistant` Message — and the
+    // handler forwards each the moment it sees it, so the order they reach the
+    // browser in is the order the runtime produced them, which is not always
+    // this one. A `partial` carries the whole block, so the late one is the
+    // whole paragraph arriving after the log already holds it.
+    const overtaken = chance(0.5)
+    if (!overtaken) partial({ ...one }, true)
     retain({
       kind: one.kind,
       text: one.text,
       ...(one.thread === undefined ? {} : { thread: one.thread }),
     } as Frame)
+    if (overtaken) partial({ ...one }, true)
   }
 
   const tool = (): void => {
@@ -426,3 +443,114 @@ test('what is on screen is the log, plus exactly what is not in it yet, placed w
   }
 })
 
+
+// --- a block that has already settled ---------------------------------------------
+
+/**
+ * The property above models a handler that never contradicts itself: every
+ * block's deltas arrive, then its close, then the Frame that is the whole of
+ * it, and no block index is ever used twice. A real one does contradict
+ * itself, in one narrow way — a block's `content_block_stop` can reach the
+ * browser *after* the `assistant` Message it belongs to, because the two travel
+ * as separate things the runtime yields and the handler forwards each the
+ * moment it sees it.
+ *
+ * That is one arrival the property test cannot generate, and it is the one that
+ * has been on screen: a `partial` carries the **whole** block rather than an
+ * addition to it, so a stale one admitted as a fresh live block is the entire
+ * paragraph a second time, placed at wherever the log had reached by then.
+ *
+ * These are examples rather than a widened model, because each states a
+ * different thing about identity and the second is the one that reads as a fix
+ * working when it is not.
+ */
+
+function arrive(state: SessionState, index: number, frame: Frame): SessionState {
+  return step(state, { type: 'frame', index, body: JSON.stringify(frame) })
+}
+
+function stream(state: SessionState, partial: PartialText): SessionState {
+  return step(state, { type: 'partial', body: JSON.stringify(partial) })
+}
+
+/** What the Transcript says the agent said, in order. */
+function saidIn(transcript: Transcript): string[] {
+  return transcript.messages.flatMap((message) => (message.kind === 'text' ? [message.text] : []))
+}
+
+const call = (id: string): Frame => ({ kind: 'tool-call', id, name: 'Bash', input: { command: 'ls' } })
+const answered = (id: string): Frame => ({ kind: 'tool-result', id, output: 'ok', isError: false })
+
+test('a block whose Frame has landed is not brought back by its own closing partial', () => {
+  const log: Frame[] = [
+    { kind: 'text', text: 'Ordering bug — pageNarrow is read before it is set.' },
+    call('a'),
+    answered('a'),
+    call('b'),
+    answered('b'),
+  ]
+
+  let state = initial()
+  state = stream(state, { block: 1, message: 1, kind: 'text', text: 'Ordering bug —' })
+  state = stream(state, {
+    block: 1,
+    message: 1,
+    kind: 'text',
+    text: 'Ordering bug — pageNarrow is read before it is set.',
+  })
+  for (const [index, frame] of log.entries()) state = arrive(state, index, frame)
+
+  // The close, overtaken by its own Frame. There is nothing left for it to
+  // close: the log already speaks for the whole block.
+  state = stream(state, {
+    block: 1,
+    message: 1,
+    kind: 'text',
+    text: 'Ordering bug — pageNarrow is read before it is set.',
+    done: true,
+  })
+
+  expect(saidIn(transcriptOf(state, false))).toEqual([
+    'Ordering bug — pageNarrow is read before it is set.',
+  ])
+  // Nothing is outstanding, so what is on screen is the log and only the log.
+  expect(transcriptOf(state, false)).toEqual(reduce(log, { reasoning: false }))
+})
+
+test('the next Message opens block 0 again, and it still streams', () => {
+  // The trap in any memory of which blocks have settled: **block indices
+  // restart at 0 for every assistant Message**, so `#0` names a different block
+  // in each of them. Keyed on the index alone, the memory of the first Message
+  // suppresses the first block of the second — and what that costs is not a
+  // paragraph twice but no live prose at all from the second Message on, which
+  // is worse than the bug and is invisible to the test above.
+  let state = initial()
+  state = stream(state, { block: 0, message: 1, kind: 'text', text: 'Reading the test first.' })
+  state = arrive(state, 0, { kind: 'text', text: 'Reading the test first.' })
+  state = arrive(state, 1, call('a'))
+  state = arrive(state, 2, answered('a'))
+
+  state = stream(state, { block: 0, message: 2, kind: 'text', text: 'There it is.' })
+
+  expect(saidIn(transcriptOf(state, false))).toEqual(['Reading the test first.', 'There it is.'])
+  expect(state.live).toHaveLength(1)
+})
+
+test('a connection that drops mid-block leaves no half-written copy, then or later', () => {
+  // What `retire` exists for, and why it does not wait to be told the block
+  // closed: the `partial` that says so carries no `id:`, so a reconnect never
+  // replays it. The half that was on screen when the connection went has to
+  // give way to the Frame the reconnect brings — and must not come back when
+  // the straggler for that block finally lands.
+  let state = initial()
+  state = stream(state, { block: 0, message: 1, kind: 'text', text: 'Once upon' })
+  state = arrive(state, 0, { kind: 'text', text: 'Once upon a time' })
+
+  expect(saidIn(transcriptOf(state, false))).toEqual(['Once upon a time'])
+  expect(state.live).toEqual([])
+
+  state = stream(state, { block: 0, message: 1, kind: 'text', text: 'Once upon a', done: true })
+
+  expect(saidIn(transcriptOf(state, false))).toEqual(['Once upon a time'])
+  expect(state.live).toEqual([])
+})

@@ -5,7 +5,7 @@ import type { PartialText } from './partial.ts'
 import { decodeEvents, frameEvent, partialEvent, resumeFrom } from './wire.ts'
 
 const said: Frame = { kind: 'text', text: 'hello' }
-const streaming: PartialText = { block: 0, kind: 'text', text: 'hel' }
+const streaming: PartialText = { block: 0, message: 1, kind: 'text', text: 'hel' }
 
 describe('what an event carries', () => {
   test('names a Frame by its index in the log', () => {
@@ -19,7 +19,7 @@ describe('what an event carries', () => {
     // reconnect that resumed past one would skip a Frame that was.
     expect(partialEvent(streaming)).not.toContain('id:')
     expect(partialEvent(streaming)).toBe(
-      `event: partial\ndata: {"block":0,"kind":"text","text":"hel"}\n\n`,
+      `event: partial\ndata: {"block":0,"message":1,"kind":"text","text":"hel"}\n\n`,
     )
   })
 })

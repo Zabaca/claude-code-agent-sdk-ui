@@ -231,8 +231,28 @@ class AgentSession {
    * from another Session is a key this map never had.
    */
   readonly #images: ImageStore = imageStore()
-  /** Text and reasoning blocks open right now, keyed by Thread and block index. */
+  /** Text and reasoning blocks open right now, keyed by {@link blockAt}. */
   readonly #open = new Map<string, { kind: PartialKind; text: string; thread?: string }>()
+  /**
+   * How many Messages each Thread has started, which is the half of a block's
+   * identity the index alone cannot carry — every Message numbers its blocks
+   * from 0 again, so `#0` names a different block in each of them.
+   *
+   * Per Thread rather than one running count, because a sub-agent's
+   * `message_start` interleaves with the agent's own: a single counter would
+   * change identity underneath a block whose deltas are still arriving, and
+   * split one block into two on screen.
+   */
+  readonly #messages = new Map<string, number>()
+  /**
+   * Where those ordinals start. Seeded from the restored log for the reason the
+   * Frame ids are: a browser that outlived the process is still holding the
+   * identities it was given, and an ordinal starting from zero again would hand
+   * it one it has already retired — which it reads as a block that must not
+   * come back, so the prose stops streaming and only appears when its Frame
+   * lands. Continuing past the log costs nothing and closes that.
+   */
+  readonly #messagesFrom: number
 
   #query: AgentQuery | undefined
   #input: Pushable<AgentPromptMessage> | undefined
@@ -247,6 +267,7 @@ class AgentSession {
     // for `append` passed while doing nothing. The log is this Session's to
     // hold; what the host keeps is the host's.
     this.#log = [...(options.log?.read() ?? [])]
+    this.#messagesFrom = this.#log.length
     this.#options = options
   }
 
@@ -619,14 +640,25 @@ class AgentSession {
    */
   #partial(event: { type: string; thread: string | undefined; body: Rec }): void {
     const { type, thread, body } = event
-    if (type === 'message_start' || type === 'message_stop') {
+    const of = thread ?? ''
+    if (type === 'message_start') {
+      // The one place an ordinal moves. Blocks left open by the Message that
+      // just ended are dropped rather than carried into this one — the runtime
+      // retains no Frame for a block it never closed, so there is nothing for
+      // them to become.
+      this.#messages.set(of, this.#messageOf(of) + 1)
+      this.#open.clear()
+      return
+    }
+    if (type === 'message_stop') {
       this.#open.clear()
       return
     }
 
     const block = num(body['index'])
     if (block === undefined) return
-    const at = blockAt({ block, thread })
+    const message = this.#messageOf(of)
+    const at = blockAt({ block, message, thread })
 
     if (type === 'content_block_start') {
       const started = record(body['content_block'])
@@ -644,14 +676,19 @@ class AgentSession {
       const said = str(delta?.['text']) ?? str(delta?.['thinking'])
       if (said === undefined) return
       open.text += said
-      this.#emit(partialEvent(compact<PartialText>({ block, ...open })))
+      this.#emit(partialEvent(compact<PartialText>({ block, message, ...open })))
       return
     }
 
     if (type === 'content_block_stop') {
       this.#open.delete(at)
-      this.#emit(partialEvent(compact<PartialText>({ block, ...open, done: true })))
+      this.#emit(partialEvent(compact<PartialText>({ block, message, ...open, done: true })))
     }
+  }
+
+  /** This Thread's Message ordinal, counting on from whatever the log held. */
+  #messageOf(thread: string): number {
+    return this.#messages.get(thread) ?? this.#messagesFrom
   }
 
   // --- the log ----------------------------------------------------------------

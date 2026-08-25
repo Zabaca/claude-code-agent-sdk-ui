@@ -53,8 +53,16 @@ export const HELD = new Map<string, string>([
  * once the block closes — the same two-step live mode makes, so what replay
  * shows of streaming is what live does.
  */
-export function prose(text: string, options: { block?: number; thread?: string } = {}): Beat[] {
+export function prose(
+  text: string,
+  options: { block?: number; message?: number; thread?: string } = {},
+): Beat[] {
   const block = options.block ?? 0
+  // The corpus below numbers its blocks across the whole session, so it is one
+  // Message and the indices are its identity. An answer to something typed is
+  // its own Message and starts at block 0 again — which is a different block
+  // from the corpus's block 0, and has to say so.
+  const message = options.message ?? 0
   const thread = options.thread
   const words = text.split(' ')
   const beats: Beat[] = []
@@ -63,10 +71,12 @@ export function prose(text: string, options: { block?: number; thread?: string }
     written = written === '' ? word : `${written} ${word}`
     beats.push({
       after: 34,
-      partial: compact<PartialText>({ block, kind: 'text', text: written, thread }),
+      partial: compact<PartialText>({ block, message, kind: 'text', text: written, thread }),
     })
   }
-  beats.push({ partial: compact<PartialText>({ block, kind: 'text', text, done: true, thread }) })
+  beats.push({
+    partial: compact<PartialText>({ block, message, kind: 'text', text, done: true, thread }),
+  })
   beats.push({ frame: compact<Frame>({ kind: 'text', text, thread }) })
   return beats
 }
@@ -273,7 +283,7 @@ export function threadEnded(thread: string, report: string, failed = false): Bea
  */
 const THREE_THREADS: Beat[] = [
   { after: 900, frame: { kind: 'prompt', text: 'audit the three packages in parallel' } },
-  ...prose('Opening a Thread per package.', { block: 7 }),
+  ...prose('Opening a Thread per package.', { block: 10 }),
   opensThread({ thread: 'toolu_task_core', description: 'audit core', subagentType: 'Explore' }),
   opensThread({ thread: 'toolu_task_ui', description: 'audit ui', subagentType: 'Explore' }),
   opensThread({
@@ -328,7 +338,7 @@ const THREE_THREADS: Beat[] = [
   { frame: { kind: 'context', totalTokens: 186000, maxTokens: 200000, percentage: 93 } },
   // The main agent is still working while they run, which is what makes
   // attribution worth anything: this line is nobody's Thread.
-  ...prose('Two are back; the third is still reading.', { block: 8 }),
+  ...prose('Two are back; the third is still reading.', { block: 11 }),
   threadEnded('toolu_task_ui', 'ui: no hardcoded hex left.'),
   threadEnded('toolu_task_core', 'core: pure, no clock, no socket.'),
   ...tool({
@@ -600,22 +610,26 @@ export const OPENING: Beat[] = [
  * reaches the runtime — not that the runtime is clever.
  */
 export function reply(text: string): Beat[] {
+  // Its own Message, so its blocks are its own. Reusing the corpus's block 0
+  // would hand the browser an identity the corpus has already given up, and
+  // what it does with one of those is nothing: the prose would not stream.
+  const message = counter()
   return [
-    ...prose(`Replaying an answer to “${text}”. Nothing here talks to a model.`),
+    ...prose(`Replaying an answer to “${text}”. Nothing here talks to a model.`, { message }),
     ...tool({
-      id: `toolu_replay_${counter()}`,
+      id: `toolu_replay_${message}`,
       name: 'Read',
       input: { file_path: '/repo/README.md' },
       output: '# claude-code-agent-sdk-ui\n\nThe layer between the SDK and a rendered UI.',
       takes: 600,
     }),
-    ...prose('That is the whole of replay: a Frame log, played.', { block: 1 }),
+    ...prose('That is the whole of replay: a Frame log, played.', { block: 1, message }),
     { frame: { kind: 'settled', result: 'Replayed.', turns: 1 } },
   ]
 }
 
 let replies = 0
-/** Keeps two answers' tool calls from sharing a `tool_use` id. */
+/** Keeps two answers' Messages, and their tool calls, from sharing an identity. */
 function counter(): number {
   replies += 1
   return replies

@@ -12,6 +12,12 @@ import { blockAt, isPartialKind, type PartialText } from './partial.ts'
  * puts three Threads' prose on the same path as the agent's own, and a block
  * identified by its index alone then lands a background agent's words inside the
  * answer to the person.
+ *
+ * The Message is the other half of the same problem, one axis along instead of
+ * across: the SDK numbers blocks from 0 within each Message, so an identity
+ * that is only Thread and index is reused several times in one Turn — and the
+ * browser has to be able to tell a block it has never seen from one whose Frame
+ * it already holds.
  */
 describe('block identity', () => {
   test('tells the same block index in two Threads apart', () => {
@@ -31,12 +37,32 @@ describe('block identity', () => {
     expect(blockAt({ block: 0, thread: 'call-1' })).not.toBe(blockAt({ block: 1, thread: 'call-1' }))
   })
 
+  test('tells one Message from the next, which numbers its blocks from 0 again', () => {
+    // The other whole reason the rule exists. Both are block 0, one Thread, one
+    // Turn — and the first has settled into a Frame by the time the second
+    // opens, so a consumer that could not tell them apart would either bring
+    // the first back or refuse the second.
+    expect(blockAt({ block: 0, message: 1 })).not.toBe(blockAt({ block: 0, message: 2 }))
+    expect(blockAt({ block: 0, message: 4, thread: 'call-1' })).not.toBe(
+      blockAt({ block: 0, message: 5, thread: 'call-1' }),
+    )
+  })
+
+  test('reads a wire that names no Message as one long Message', () => {
+    // What comes off the wire is unknown until asked, and a handler older than
+    // the field says nothing about Messages. That is exactly the identity a
+    // block used to have, so it is what an absent Message reads as.
+    expect(blockAt({ block: 2, thread: 'call-1' })).toBe(
+      blockAt({ block: 2, message: 0, thread: 'call-1' }),
+    )
+  })
+
   test('reads a PartialText off the wire without being handed its parts', () => {
     // What the browser has is the whole record; what the handler has is the
     // index and the Thread. One rule has to serve both.
-    const partial: PartialText = { block: 3, kind: 'text', text: 'hi', thread: 'call-9' }
+    const partial: PartialText = { block: 3, message: 2, kind: 'text', text: 'hi', thread: 'call-9' }
 
-    expect(blockAt(partial)).toBe(blockAt({ block: 3, thread: 'call-9' }))
+    expect(blockAt(partial)).toBe(blockAt({ block: 3, message: 2, thread: 'call-9' }))
   })
 })
 
