@@ -301,6 +301,17 @@ export type SessionState = {
   frames: (Frame | undefined)[]
   /** Blocks streaming right now, in the order they were started. */
   live: Live[]
+  /**
+   * Blocks that have given up their place and may not take it again: the ones
+   * a Frame has spoken for, and the ones a Turn ending took with it.
+   *
+   * Held because "not currently live" is two different facts — a block nobody
+   * has seen yet, and one the log already holds the whole of — and admitting a
+   * `partial` on the first reading is how the second put a whole paragraph on
+   * screen twice. Never forgotten: a straggler is stale for as long as the
+   * Session lasts, and there is no later moment at which it stops being.
+   */
+  retired: Set<string>
   /** Prompts on the wire whose Frame has not come back yet. */
   sent: Sent[]
   error?: string
@@ -339,7 +350,7 @@ export type Arrival =
   | { type: 'broke'; why: string }
 
 export function initial(): SessionState {
-  return { frames: [], live: [], sent: [] }
+  return { frames: [], live: [], sent: [], retired: new Set() }
 }
 
 export function step(state: SessionState, arrival: Arrival): SessionState {
@@ -358,10 +369,15 @@ export function step(state: SessionState, arrival: Arrival): SessionState {
       frames[arrival.index] = frame
       if (known) return { ...state, frames }
 
+      const closed = retire(state.live, frame, arrival.index)
       return {
         ...state,
         frames,
-        live: retire(state.live, frame, arrival.index),
+        live: closed.live,
+        retired:
+          closed.retired.length === 0
+            ? state.retired
+            : new Set([...state.retired, ...closed.retired]),
         sent: settle(state.sent, frame),
       }
     }
@@ -369,6 +385,12 @@ export function step(state: SessionState, arrival: Arrival): SessionState {
       const partial = parse<PartialText>(arrival.body)
       if (!partial || !isPartialKind(partial.kind)) return state
       const at = blockAt(partial)
+      // A block does not come back. Its Frame is the whole of it, and a
+      // `partial` carries the whole block rather than an addition to it — so a
+      // stale one, the close that overtook its own Frame, would otherwise be
+      // admitted as a fresh block holding the entire paragraph, placed at
+      // wherever the log had reached by the time it landed.
+      if (state.retired.has(at)) return state
       const held = state.live.findIndex((one) => one.at === at)
       const block = compact<Live>({
         at,
@@ -427,21 +449,34 @@ export function step(state: SessionState, arrival: Arrival): SessionState {
  * Frame for a block the runtime never completed, so a reload would not show it
  * either; what is on screen follows the log rather than outliving it.
  */
-function retire(live: Live[], frame: Frame, index: number): Live[] {
-  if (live.length === 0) return live
-  if (frame.kind === 'settled' || frame.kind === 'failed') return []
-  if (frame.kind !== 'text' && frame.kind !== 'reasoning') return live
+function retire(live: Live[], frame: Frame, index: number): Retired {
+  if (live.length === 0) return { live, retired: [] }
+  if (frame.kind === 'settled' || frame.kind === 'failed') {
+    return { live: [], retired: live.map((one) => one.at) }
+  }
+  if (frame.kind !== 'text' && frame.kind !== 'reasoning') return { live, retired: [] }
   const at = live.findIndex((one) => one.kind === frame.kind && one.thread === frame.thread)
-  if (at === -1) return live
+  if (at === -1) return { live, retired: [] }
+  const gone = live[at] as Live
   // The Frame takes the settled block's place, and that place was ahead of
   // every block opened after it — so those move past the Frame rather than
   // staying where a block that is no longer live used to be. Only blocks
   // behind the settled one move, and only far enough to clear it: a Frame that
   // settles nothing, which is most of them, moves nothing at all.
-  return [
-    ...live.slice(0, at),
-    ...live.slice(at + 1).map((one) => ({ ...one, after: Math.max(one.after, index + 1) })),
-  ]
+  return {
+    live: [
+      ...live.slice(0, at),
+      ...live.slice(at + 1).map((one) => ({ ...one, after: Math.max(one.after, index + 1) })),
+    ],
+    retired: [gone.at],
+  }
+}
+
+/** What a Frame left of the blocks still being written, and what it took. */
+type Retired = {
+  live: Live[]
+  /** Keys that have given up their place: {@link SessionState.retired}. */
+  retired: string[]
 }
 
 /**

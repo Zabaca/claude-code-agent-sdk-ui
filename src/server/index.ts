@@ -1,4 +1,6 @@
 export { createAgentHandler } from './handler.ts'
+export type { FrameLog } from './handler.ts'
+export type { Frame } from '../core/frame.ts'
 export type {
   AgentEvent,
   AgentHandler,

@@ -101,12 +101,12 @@ test('prose still being written is on screen before its Frame exists', async () 
 
   await act(async () => {
     fake.frame({ kind: 'prompt', text: 'say hi' })
-    fake.partial({ block: 0, kind: 'text', text: 'Hel' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Hel' })
   })
   expect(screen.getByText('Hel')).toBeDefined()
 
   await act(async () => {
-    fake.partial({ block: 0, kind: 'text', text: 'Hello there' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Hello there' })
   })
   // Replace, never append: the handler sends the whole block each time.
   expect(there(screen.queryByText('Hel'))).toBe(false)
@@ -584,6 +584,28 @@ test('esc interrupts from anywhere in the Session, not only from the input', asy
   view.unmount()
 })
 
+test('esc interrupts with nothing in the Session focused', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'write a novel' })
+  })
+
+  // Nobody has clicked anything, so focus is still the document's — which is
+  // where it sits after a page load, and where it goes back to the moment a
+  // reader clicks the Transcript's own text. A handler that waits for the
+  // event to bubble up out of the Session never sees this one at all, and the
+  // working line goes on claiming esc will interrupt while esc does nothing.
+  await act(async () => {
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+  })
+
+  expect(wire.posted).toEqual([{ body: { type: 'interrupt' } }])
+  view.unmount()
+})
+
 test('the working line is on screen only while the Turn runs', async () => {
   const fake = fakeSse()
   const view = await mount(fake)
@@ -640,7 +662,7 @@ test('deliberation is off the screen by default, and on it only when asked for',
     // Live and retained alike. Streaming deliberation into the Transcript would
     // put the model's reasoning on screen as though it were an answer, which is
     // a product decision nobody made.
-    fake.partial({ block: 0, kind: 'reasoning', text: 'Maybe not, let me check' })
+    fake.partial({ block: 0, message: 1, kind: 'reasoning', text: 'Maybe not, let me check' })
     fake.frame({ kind: 'reasoning', text: 'Maybe not, let me check the caller' })
     fake.frame({ kind: 'text', text: 'It is safe.' })
   })

@@ -4,7 +4,8 @@ import { readdir } from 'node:fs/promises'
 import type { ClassifyInput } from '../core/classify.ts'
 import { decodeEvents } from '../core/wire.ts'
 import { fakeQuery } from './fake.ts'
-import { createAgentHandler, type AgentQueryFactory } from './handler.ts'
+import type { Frame } from '../core/frame.ts'
+import { createAgentHandler, type AgentQueryFactory, type FrameLog } from './handler.ts'
 
 test('a Session streams Frames over SSE, each event carrying its index as id', async () => {
   const fake = fakeQuery()
@@ -64,9 +65,9 @@ test('deltas stream live but the retained log holds coalesced whole Messages', a
     'frame',
   ])
   expect(events.slice(1, 4).map((event) => event.data)).toEqual([
-    { block: 0, kind: 'text', text: 'Hel' },
-    { block: 0, kind: 'text', text: 'Hello' },
-    { block: 0, kind: 'text', text: 'Hello', done: true },
+    { block: 0, message: 1, kind: 'text', text: 'Hel' },
+    { block: 0, message: 1, kind: 'text', text: 'Hello' },
+    { block: 0, message: 1, kind: 'text', text: 'Hello', done: true },
   ])
   // Partials carry no `id:`, so they never move the browser's resume cursor.
   expect(events.slice(1, 4).map((event) => event.id)).toEqual([undefined, undefined, undefined])
@@ -81,6 +82,98 @@ test('deltas stream live but the retained log holds coalesced whole Messages', a
     'settled',
     'cost',
   ])
+})
+
+test('a block says which Message it is in, so two Messages never share one', async () => {
+  // The index alone is not an identity that lasts: the SDK numbers blocks from
+  // 0 within each Message, so the second Message's first block is `0` again —
+  // and by then the first Message's block 0 has settled into a Frame. Without
+  // the Message on the wire the browser sees one identity, and has to choose
+  // between bringing a settled block back and refusing a block that is really
+  // being written. Both are on screen; neither is acceptable.
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('two messages please'))
+
+  fake.say(startsMessage())
+  fake.say(startsBlock(0, 'text'))
+  fake.say(delta(0, 'First.'))
+  fake.say(stopsBlock(0))
+  fake.say(says('First.'))
+  fake.say(startsMessage())
+  fake.say(startsBlock(0, 'text'))
+  fake.say(delta(0, 'Second.'))
+
+  const events = await read(stream, 5)
+  const partials = events.filter((event) => event.name === 'partial').map((event) => event.data)
+
+  expect(partials).toEqual([
+    { block: 0, message: 1, kind: 'text', text: 'First.' },
+    { block: 0, message: 1, kind: 'text', text: 'First.', done: true },
+    { block: 0, message: 2, kind: 'text', text: 'Second.' },
+  ])
+})
+
+test("a Thread counts its own Messages, not the ones it is running inside", async () => {
+  // A sub-agent's `message_start` arrives on the same stream as the agent's
+  // own, interleaved with it. Counted once for the whole Session, the Thread's
+  // first Message would take whatever number the agent had reached — so the
+  // ordinal would say more about how much the agent had said than about the
+  // Thread, and would move underneath a Thread's block for reasons that have
+  // nothing to do with the Thread. Each Thread counts its own, which is the
+  // same rule the Thread half of the identity already follows.
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('delegate it'))
+
+  fake.say(startsMessage())
+  fake.say(startsBlock(0, 'text'))
+  fake.say(delta(0, 'Main'))
+  fake.say(startsMessage('call-1'))
+  fake.say(startsBlock(0, 'text', 'call-1'))
+  fake.say(delta(0, 'Sub', 'call-1'))
+
+  const events = await read(stream, 3)
+  const partials = events.filter((event) => event.name === 'partial').map((event) => event.data)
+
+  expect(partials).toEqual([
+    { block: 0, message: 1, kind: 'text', text: 'Main' },
+    // The Thread's first Message, not the agent's second.
+    { block: 0, message: 1, kind: 'text', text: 'Sub', thread: 'call-1' },
+  ])
+})
+
+test('Message ordinals continue past a restored log rather than starting again', async () => {
+  // The Session outlives the process — the host hands back a log and the Frame
+  // ids continue from it. A browser that outlived the process too is still
+  // holding the block identities it was given, and it treats an identity it has
+  // already retired as a block that must not come back. An ordinal restarting
+  // at 1 would hand it exactly one of those, and the prose would stop
+  // streaming: on screen only when its Frame lands.
+  const fake = fakeQuery()
+  const handler = createAgentHandler({
+    createQuery: fake.createQuery,
+    log: memoryLog([
+      { kind: 'prompt', text: 'earlier' },
+      { kind: 'text', text: 'said earlier' },
+    ]),
+  })
+
+  const stream = await handler(open())
+  await handler(prompt('carry on'))
+
+  fake.say(startsMessage())
+  fake.say(startsBlock(0, 'text'))
+  fake.say(delta(0, 'Again'))
+
+  const events = await read(stream, 4)
+  const partials = events.filter((event) => event.name === 'partial').map((event) => event.data)
+
+  expect(partials).toEqual([{ block: 0, message: 3, kind: 'text', text: 'Again' }])
 })
 
 test('a dropped connection resumes from Last-Event-ID', async () => {
@@ -915,20 +1008,30 @@ function streamEvent(event: Record<string, unknown>, thread: string | null = nul
   return { type: 'stream_event', parent_tool_use_id: thread, event }
 }
 
-function startsMessage(): ClassifyInput {
-  return streamEvent({ type: 'message_start', message: { role: 'assistant', content: [] } })
+function startsMessage(thread: string | null = null): ClassifyInput {
+  return streamEvent({ type: 'message_start', message: { role: 'assistant', content: [] } }, thread)
 }
 
-function startsBlock(index: number, type: 'text' | 'thinking'): ClassifyInput {
-  return streamEvent({ type: 'content_block_start', index, content_block: { type, text: '' } })
+function startsBlock(
+  index: number,
+  type: 'text' | 'thinking',
+  thread: string | null = null,
+): ClassifyInput {
+  return streamEvent(
+    { type: 'content_block_start', index, content_block: { type, text: '' } },
+    thread,
+  )
 }
 
-function delta(index: number, text: string): ClassifyInput {
-  return streamEvent({
-    type: 'content_block_delta',
-    index,
-    delta: { type: 'text_delta', text },
-  })
+function delta(index: number, text: string, thread: string | null = null): ClassifyInput {
+  return streamEvent(
+    {
+      type: 'content_block_delta',
+      index,
+      delta: { type: 'text_delta', text },
+    },
+    thread,
+  )
 }
 
 function stopsBlock(index: number): ClassifyInput {
@@ -1033,3 +1136,115 @@ test('a session with no subscription reports no limits, rather than limits of ze
   expect(events.some((event) => event.data['kind'] === 'rate-limit')).toBe(false)
   expect(events.some((event) => event.data['kind'] === 'context')).toBe(true)
 })
+
+/**
+ * **A log that outlives the process that wrote it.**
+ *
+ * A Session's Frames live in memory here, which is right for a library that
+ * cannot know where a host keeps things — and wrong for every host that
+ * restarts. Measured on the consumer that found it: the server is a systemd
+ * unit behind an apply, so ANY deploy restarts it, and a reconnecting reader
+ * got an empty conversation while the agent, holding a resumed Session id,
+ * answered as though the conversation were still running. Two readings of one
+ * system, disagreeing, neither reported.
+ *
+ * So the log becomes injectable, exactly as `resume` already makes the Session
+ * id injectable — the two are halves of the same idea, and a host that persists
+ * one and not the other gets an agent that remembers and a screen that does
+ * not.
+ *
+ * The interface is `read`/`append` rather than a whole-array setter, because
+ * appending is what actually happens and a setter invites a host to rewrite
+ * history it did not author. No file handling here: a library that picks a
+ * storage medium picks it for every consumer.
+ */
+test('a Session seeded with a log replays it to the first reader', async () => {
+  const fake = fakeQuery()
+  const before: Frame[] = [
+    { kind: 'prompt', text: 'what did we say' },
+    { kind: 'text', text: 'this much', thread: 'main' },
+  ]
+  const handler = createAgentHandler({ createQuery: fake.createQuery, log: memoryLog(before) })
+
+  const stream = await handler(open())
+  const events = await read(stream, 2)
+
+  expect(events.map((event) => event.id)).toEqual(['0', '1'])
+  expect(events.map((event) => event.data['kind'])).toEqual(['prompt', 'text'])
+})
+
+test('Frames the Session retains are appended to the log, in order', async () => {
+  const fake = fakeQuery()
+  const log = memoryLog([])
+  const handler = createAgentHandler({ createQuery: fake.createQuery, log })
+
+  await handler(open())
+  await handler(prompt('hello'))
+  fake.say(init('session-abc'))
+  fake.say(settled())
+  await read(await handler(open()), 1)
+
+  expect(log.read().length).toBeGreaterThan(0)
+  expect(log.read()[0]?.kind).toBe('prompt')
+})
+
+test('a seeded log continues its numbering rather than restarting it', async () => {
+  // The id IS the index, and `Last-Event-ID` resumes from it. A restored log
+  // that numbered from zero again would hand a reconnecting reader ids it had
+  // already seen, and the reader would drop the new Frames as replays.
+  const fake = fakeQuery()
+  const log = memoryLog([{ kind: 'prompt', text: 'earlier' }])
+  const handler = createAgentHandler({ createQuery: fake.createQuery, log })
+
+  await handler(open())
+  await handler(prompt('later'))
+  const events = await read(await handler(open()), 2)
+
+  expect(events.map((event) => event.id)).toEqual(['0', '1'])
+  expect(events[1]?.data['text']).toBe('later')
+})
+
+test('the host’s own array is not adopted, and not mutated behind its back', async () => {
+  // Registered as an expected survivor in the batch that found it: nothing
+  // tested the copy, and the cost of not copying was not theoretical. When the
+  // Session held the host's array directly, every retained Frame arrived in the
+  // host's storage without `append` ever running — so the test for `append`
+  // passed against a handler that had none. A seam whose contract is "call me"
+  // must not also work by accident.
+  const fake = fakeQuery()
+  const held: Frame[] = [{ kind: 'prompt', text: 'earlier' }]
+  const appended: Frame[] = []
+  const handler = createAgentHandler({
+    createQuery: fake.createQuery,
+    log: { read: () => held, append: (frame) => void appended.push(frame) },
+  })
+
+  await handler(open())
+  await handler(prompt('later'))
+  await read(await handler(open()), 2)
+
+  expect(held).toHaveLength(1)
+  expect(appended.map((f) => f.kind)).toContain('prompt')
+})
+
+test('no log at all is the ordinary case and stays in memory', async () => {
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  await handler(open())
+  await handler(prompt('hello'))
+  const events = await read(await handler(open()), 1)
+
+  expect(events[0]?.data['kind']).toBe('prompt')
+})
+
+/** The shape a host implements; the library ships no storage of its own. */
+function memoryLog(seed: Frame[]): FrameLog {
+  const held = [...seed]
+  // A COPY from `read`, which is what a real host does — `fileFrameLog` parses
+  // a file and hands back a fresh array every time. Returning the internal one
+  // made this helper alias the Session's own log, so Frames arrived in it
+  // whether or not `append` was ever called, and the test below passed against
+  // a handler that had no `append` at all.
+  return { read: () => [...held], append: (frame) => void held.push(frame) }
+}

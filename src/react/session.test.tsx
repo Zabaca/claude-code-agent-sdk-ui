@@ -293,7 +293,7 @@ test('a dropped connection resumes mid-stream, losing and doubling nothing', asy
     fake.frame({ kind: 'session', sessionId: 'session-abc' })
     fake.frame({ kind: 'prompt', text: 'hello' })
     // Live text carries no `id:`, so it must not move the resume cursor.
-    fake.partial({ block: 0, kind: 'text', text: 'Hel' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Hel' })
   })
 
   expect(session.current.transcript.messages).toEqual([
@@ -394,7 +394,7 @@ test('live text replaces what it had, and is not added to it', async () => {
 
   await act(async () => {
     fake.frame({ kind: 'prompt', text: 'hello' })
-    fake.partial({ block: 0, kind: 'text', text: 'Hel' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Hel' })
   })
 
   expect(session.current.transcript.messages).toEqual([
@@ -402,7 +402,7 @@ test('live text replaces what it had, and is not added to it', async () => {
     { kind: 'text', text: 'Hel' },
   ])
 
-  await act(async () => fake.partial({ block: 0, kind: 'text', text: 'Hello there' }))
+  await act(async () => fake.partial({ block: 0, message: 1, kind: 'text', text: 'Hello there' }))
 
   expect(session.current.transcript.messages).toEqual([
     { kind: 'prompt', text: 'hello' },
@@ -415,8 +415,8 @@ test("a block's Frame takes the place of its live text rather than joining it", 
   const session = await mount(fake)
 
   await act(async () => {
-    fake.partial({ block: 0, kind: 'text', text: 'Hello there' })
-    fake.partial({ block: 0, kind: 'text', text: 'Hello there', done: true })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Hello there' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Hello there', done: true })
   })
 
   // The block closed and its Frame has not arrived. What was written stays on
@@ -433,9 +433,9 @@ test('a block still being written is not the one a Frame settles', async () => {
   const session = await mount(fake)
 
   await act(async () => {
-    fake.partial({ block: 0, kind: 'text', text: 'First.' })
-    fake.partial({ block: 0, kind: 'text', text: 'First.', done: true })
-    fake.partial({ block: 1, kind: 'text', text: 'Sec' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'First.' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'First.', done: true })
+    fake.partial({ block: 1, message: 1, kind: 'text', text: 'Sec' })
   })
 
   expect(session.current.transcript.messages).toEqual([
@@ -451,7 +451,7 @@ test('a block still being written is not the one a Frame settles', async () => {
   ])
 
   await act(async () => {
-    fake.partial({ block: 1, kind: 'text', text: 'Second.', done: true })
+    fake.partial({ block: 1, message: 1, kind: 'text', text: 'Second.', done: true })
     fake.frame({ kind: 'text', text: 'Second.' })
   })
 
@@ -466,8 +466,8 @@ test("a Thread's live text is its own, not the agent's", async () => {
   await act(async () => {
     // Both are block 0. A block is identified by its Thread as well as its
     // index, or a sub-agent's prose overwrites the agent's.
-    fake.partial({ block: 0, kind: 'text', text: 'Main says' })
-    fake.partial({ block: 0, kind: 'text', text: 'Sub says', thread: 'call-1' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Main says' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Sub says', thread: 'call-1' })
   })
 
   expect(session.current.transcript.messages).toEqual([
@@ -497,8 +497,8 @@ test('a Frame that settles no block moves none of them', async () => {
   const session = await mount(fake)
 
   await act(async () => {
-    fake.partial({ block: 0, kind: 'text', text: 'Main says' })
-    fake.partial({ block: 0, kind: 'text', text: 'Sub says', thread: 'call-1' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Main says' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Sub says', thread: 'call-1' })
   })
 
   const before = session.current.transcript.messages
@@ -538,9 +538,9 @@ test('a live block keeps its place while the log grows around it', async () => {
 
   await act(async () => fake.frame({ kind: 'prompt', text: 'audit both' }))
   note()
-  await act(async () => fake.partial({ block: 0, kind: 'text', text: 'Opening two' }))
+  await act(async () => fake.partial({ block: 0, message: 1, kind: 'text', text: 'Opening two' }))
   note()
-  await act(async () => fake.partial({ block: 0, kind: 'text', text: 'Reading', thread: 'call-1' }))
+  await act(async () => fake.partial({ block: 0, message: 1, kind: 'text', text: 'Reading', thread: 'call-1' }))
   note()
   // The Thread finishes first, so its Frame is retained while the agent's block
   // is still open — the arrival that used to reshuffle the two.
@@ -568,7 +568,7 @@ test('live text does not outlive the Turn that was writing it', async () => {
 
   await act(async () => {
     fake.frame({ kind: 'prompt', text: 'write a novel' })
-    fake.partial({ block: 0, kind: 'text', text: 'Once upon' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Once upon' })
   })
 
   expect(session.current.transcript.messages).toHaveLength(2)
@@ -589,8 +589,8 @@ test('a Frame settles the block it is the whole of, not one of another kind', as
 
   await act(async () => {
     // Deliberation opened first and is still being written when prose starts.
-    fake.partial({ block: 0, kind: 'reasoning', text: 'Hmm, maybe' })
-    fake.partial({ block: 1, kind: 'text', text: 'Yes' })
+    fake.partial({ block: 0, message: 1, kind: 'reasoning', text: 'Hmm, maybe' })
+    fake.partial({ block: 1, message: 1, kind: 'text', text: 'Yes' })
   })
 
   expect(session.current.transcript.messages).toEqual([
@@ -614,7 +614,7 @@ test('deliberation stays out of the Transcript, live or retained, unless asked f
   const fake = fakeSse()
   const quiet = await mount(fake)
 
-  await act(async () => fake.partial({ block: 0, kind: 'reasoning', text: 'Let me think' }))
+  await act(async () => fake.partial({ block: 0, message: 1, kind: 'reasoning', text: 'Let me think' }))
 
   // Still being written, and still not on screen.
   expect(quiet.current.transcript.messages).toEqual([])
@@ -629,7 +629,7 @@ test('deliberation stays out of the Transcript, live or retained, unless asked f
   quiet.unmount()
   const asked = await mount(fake, { reasoning: true })
 
-  await act(async () => fake.partial({ block: 1, kind: 'reasoning', text: 'And more' }))
+  await act(async () => fake.partial({ block: 1, message: 1, kind: 'reasoning', text: 'And more' }))
 
   expect(asked.current.transcript.messages).toEqual([
     { kind: 'reasoning', text: 'Let me think about it' },

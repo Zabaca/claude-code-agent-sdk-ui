@@ -1,6 +1,12 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { Glob } from "bun";
 import { buildStylesheet } from "../../test/build-css.ts";
+import { sharedDistState } from '../../test/package-copy.ts'
+
+// Taken at import, before any `beforeAll` — so it is the state this file
+// inherited rather than one it made. See `sharedDistState` for why the
+// property is asserted here rather than in a guard of its own.
+const distBefore = sharedDistState()
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 
@@ -16,13 +22,26 @@ async function utilitiesUsed(): Promise<Set<string>> {
 }
 
 let css = "";
+/** Where the build actually ran. See `Built` in `test/build-css.ts`. */
+let builtIn = "";
 /** Backslash escapes removed, so a selector can be searched for as written. */
 let flat = "";
 
 beforeAll(async () => {
-  css = await buildStylesheet();
+  const built = await buildStylesheet()
+  css = built.css
+  builtIn = built.builtIn;
   flat = css.replaceAll("\\", "");
-});
+
+  // Bounded rather than left on bun's 5000ms default, for the reason
+  // `package.test.ts` records: a hook that spawns a build and times out takes
+  // its whole file down as one unnamed failure. This build measures 172ms, so
+  // the margin here was never tight — but the bound is now a figure somebody
+  // chose for work that starts a process, not a default meant for a hook that
+  // assigns a variable. The asymmetry decides the size: a hook killed early
+  // costs a batch and a wrong finding, a hook that genuinely hangs costs a
+  // minute.
+}, 60_000);
 
 describe("the built stylesheet", () => {
   test("carries every utility the vendored components ask for", async () => {
@@ -106,3 +125,21 @@ describe("the vendored sources", () => {
     expect(files.filter((f) => f.includes("permission"))).toEqual([]);
   });
 });
+
+test('the stylesheet is built outside the working tree, not in it', () => {
+  // The order-independent half, and the one that actually holds. Tailwind does
+  // not rewrite an output whose content is unchanged, so on a checkout that
+  // already has a matching `dist/styles.css` a build into the tree moves no
+  // mtime and the fingerprint below sees nothing. Where the build ran is not
+  // subject to that: it is either inside this package or it is not.
+  expect(builtIn).not.toBe('')
+  expect(builtIn.startsWith(ROOT)).toBe(false)
+})
+
+test("building the stylesheet leaves the package's own dist/ exactly as it found it", () => {
+  // Two suites in one working tree used to fight over this path: `build:js`
+  // opens with `rm -rf dist`, and one run's deletion landed inside another's
+  // window. Every build in this suite now happens in a disposable copy, and
+  // this is the half of that which can fail.
+  expect(sharedDistState(), 'a build in this file wrote the shared dist/').toBe(distBefore)
+})

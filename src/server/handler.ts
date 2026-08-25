@@ -62,6 +62,11 @@ export type AgentHandlerOptions = {
    * and no network, and the SDK is never imported.
    */
   createQuery?: AgentQueryFactory
+  /**
+   * Where the Frames go, so they can outlive this process. Omitted, the log is
+   * held in memory and dies with the Session — see `FrameLog`.
+   */
+  log?: FrameLog
 }
 
 export type AgentQueryFactory = (params: AgentQueryParams) => AgentQuery
@@ -174,6 +179,36 @@ export type AgentSlashCommand = {
   aliases?: string[]
 }
 
+/**
+ * Where a host keeps a Session's Frames, if it keeps them at all.
+ *
+ * The log lives in memory by default, which is right for a library that cannot
+ * know where its host keeps things and wrong for every host that restarts. A
+ * consumer running this as a unit behind an apply found the consequence: any
+ * deploy restarted the process, and a reconnecting reader got an empty
+ * conversation while the agent — holding a resumed Session id — answered as
+ * though the conversation were still running. Two readings of one system,
+ * disagreeing, and neither of them reported.
+ *
+ * This is the other half of `resume`. A host that persists the Session id and
+ * not the log gets exactly that split: an agent that remembers and a screen
+ * that does not.
+ *
+ * `read` once at construction, `append` once per retained Frame. Deliberately
+ * NOT a whole-array setter: appending is what happens, and a setter invites a
+ * host to rewrite history it did not author.
+ *
+ * **The library ships no implementation.** Choosing a storage medium here would
+ * choose it for every consumer; `read` returning `[]` is the ordinary case and
+ * the default.
+ */
+export type FrameLog = {
+  /** Every Frame recorded so far, in the order they were emitted. */
+  read(): Frame[]
+  /** Records one Frame, after the Session has retained it. */
+  append(frame: Frame): void
+}
+
 export function createAgentHandler(options: AgentHandlerOptions = {}): AgentHandler {
   const session = new AgentSession(options)
   return (request) => session.handle(request)
@@ -181,7 +216,14 @@ export function createAgentHandler(options: AgentHandlerOptions = {}): AgentHand
 
 class AgentSession {
   readonly #options: AgentHandlerOptions
-  readonly #log: Frame[] = []
+  /**
+   * Seeded from the host's log when there is one, so ids continue rather than
+   * restart. The id IS the index and `Last-Event-ID` resumes from it, so a
+   * restored log that numbered from zero again would hand a reconnecting reader
+   * ids it had already seen — and the reader would drop the new Frames as
+   * replays of old ones.
+   */
+  readonly #log: Frame[]
   readonly #listeners = new Set<(chunk: string) => void>()
   /**
    * The pictures this Session is holding, each under the handle the host minted
@@ -189,8 +231,28 @@ class AgentSession {
    * from another Session is a key this map never had.
    */
   readonly #images: ImageStore = imageStore()
-  /** Text and reasoning blocks open right now, keyed by Thread and block index. */
+  /** Text and reasoning blocks open right now, keyed by {@link blockAt}. */
   readonly #open = new Map<string, { kind: PartialKind; text: string; thread?: string }>()
+  /**
+   * How many Messages each Thread has started, which is the half of a block's
+   * identity the index alone cannot carry — every Message numbers its blocks
+   * from 0 again, so `#0` names a different block in each of them.
+   *
+   * Per Thread rather than one running count, because a sub-agent's
+   * `message_start` interleaves with the agent's own: a single counter would
+   * change identity underneath a block whose deltas are still arriving, and
+   * split one block into two on screen.
+   */
+  readonly #messages = new Map<string, number>()
+  /**
+   * Where those ordinals start. Seeded from the restored log for the reason the
+   * Frame ids are: a browser that outlived the process is still holding the
+   * identities it was given, and an ordinal starting from zero again would hand
+   * it one it has already retired — which it reads as a block that must not
+   * come back, so the prose stops streaming and only appears when its Frame
+   * lands. Continuing past the log costs nothing and closes that.
+   */
+  readonly #messagesFrom: number
 
   #query: AgentQuery | undefined
   #input: Pushable<AgentPromptMessage> | undefined
@@ -199,6 +261,13 @@ class AgentSession {
   #interrupting = false
 
   constructor(options: AgentHandlerOptions) {
+    // COPIED, never adopted. A host that returns its own array from `read`
+    // would otherwise have it mutated behind its back by every retained Frame,
+    // and its `append` would never need to run — which is exactly how the test
+    // for `append` passed while doing nothing. The log is this Session's to
+    // hold; what the host keeps is the host's.
+    this.#log = [...(options.log?.read() ?? [])]
+    this.#messagesFrom = this.#log.length
     this.#options = options
   }
 
@@ -571,14 +640,25 @@ class AgentSession {
    */
   #partial(event: { type: string; thread: string | undefined; body: Rec }): void {
     const { type, thread, body } = event
-    if (type === 'message_start' || type === 'message_stop') {
+    const of = thread ?? ''
+    if (type === 'message_start') {
+      // The one place an ordinal moves. Blocks left open by the Message that
+      // just ended are dropped rather than carried into this one — the runtime
+      // retains no Frame for a block it never closed, so there is nothing for
+      // them to become.
+      this.#messages.set(of, this.#messageOf(of) + 1)
+      this.#open.clear()
+      return
+    }
+    if (type === 'message_stop') {
       this.#open.clear()
       return
     }
 
     const block = num(body['index'])
     if (block === undefined) return
-    const at = blockAt({ block, thread })
+    const message = this.#messageOf(of)
+    const at = blockAt({ block, message, thread })
 
     if (type === 'content_block_start') {
       const started = record(body['content_block'])
@@ -596,14 +676,19 @@ class AgentSession {
       const said = str(delta?.['text']) ?? str(delta?.['thinking'])
       if (said === undefined) return
       open.text += said
-      this.#emit(partialEvent(compact<PartialText>({ block, ...open })))
+      this.#emit(partialEvent(compact<PartialText>({ block, message, ...open })))
       return
     }
 
     if (type === 'content_block_stop') {
       this.#open.delete(at)
-      this.#emit(partialEvent(compact<PartialText>({ block, ...open, done: true })))
+      this.#emit(partialEvent(compact<PartialText>({ block, message, ...open, done: true })))
     }
+  }
+
+  /** This Thread's Message ordinal, counting on from whatever the log held. */
+  #messageOf(thread: string): number {
+    return this.#messages.get(thread) ?? this.#messagesFrom
   }
 
   // --- the log ----------------------------------------------------------------
@@ -634,6 +719,9 @@ class AgentSession {
     }
 
     this.#log.push(retained)
+    // After the push, so the log and the stream agree on order, and only here:
+    // this is the single site that retains a Frame.
+    this.#options.log?.append(retained)
     this.#emit(frameEvent(retained, this.#log.length - 1))
   }
 

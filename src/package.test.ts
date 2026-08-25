@@ -4,6 +4,12 @@ import { join, relative, resolve } from 'node:path'
 
 import { installPacked, type Consumer } from '../test/consumer.ts'
 import { reachableFrom } from '../test/imports.ts'
+import { sharedDistState } from '../test/package-copy.ts'
+
+// Taken at import, before any `beforeAll` — so it is the state this file
+// inherited rather than one it made. See `sharedDistState` for why the
+// property is asserted here rather than in a guard of its own.
+const distBefore = sharedDistState()
 
 /**
  * What a consumer actually receives.
@@ -25,9 +31,40 @@ const root = new URL('../', import.meta.url).pathname
 
 let consumer: Consumer
 
+// **A minute, not bun's five seconds.** `installPacked` runs `npm pack` and
+// then installs the tarball into a scratch project — seconds of real work on an
+// idle box, and well past the default on a busy one. bun's 5000ms hook timeout
+// is a bound for unit-test setup, and this is not that.
+//
+// The failure it produced was not a slow test, which would have been survivable.
+// A timed-out `beforeAll` reports ONE failure that bun prints as
+// `(fail) (unnamed)` — no test name, because no test ran — and the file's other
+// tests are never collected. This file holds 8, so the suite's total fell by
+// exactly 7 while a single anonymous failure appeared. That signature invalidated
+// four mutation batteries in agent-lab, twice by taking down the CONTROL, which
+// is the run that certifies the tree was green before any patch. A battery whose
+// control mismatched proves nothing about any of its mutations.
+//
+// Reproduced rather than inferred: `--timeout 1` against this file prints
+// `(fail) (unnamed)` and `Ran 1 test` where there are 8, and the same flag
+// against a file with no hook changes nothing.
 beforeAll(async () => {
   consumer = await installPacked()
-})
+  // **180_000, the same bound every test in this file already declares** — and
+  // it is the same work, which is the whole point. `installPacked` runs
+  // `npm pack` → `prepack` → a full TypeScript and Tailwind build: measured at
+  // 1695ms on a quiet box, against bun's 5000ms default for a hook. A margin of
+  // 2.9x, which a contended box crosses.
+  //
+  // It did, four times (`agent-lab/31`). A hook that times out takes **every
+  // test in its file** with it and reports one `(fail) (unnamed)` with no name
+  // to look up — so the eight tests below simply stopped existing, twice taking
+  // a mutation batch's *control* with them, and the suite reported seven fewer
+  // rather than eight because the hook failure is itself counted as one.
+  //
+  // The tell was that the tests here were already given three minutes and the
+  // expensive half was left on the default nobody had thought about.
+}, 180_000)
 
 afterAll(async () => {
   await consumer?.remove()
@@ -81,10 +118,16 @@ test('every module the entry points import is in the tarball too', async () => {
     .filter((path) => path.endsWith('.js') || path.endsWith('.d.ts'))
   expect(entries.length).toBe(8)
 
+  // Walked through the **installed** package, not the working tree's `dist/`.
+  // The tree's copy is not the shipped one: it is built by whatever ran last,
+  // it is deleted by `build:js` at the start of every build, and until the pack
+  // moved into its own copy this walk only worked because `npm pack` happened
+  // to rebuild it on the way past. Reading the tree to answer a question about
+  // the tarball is the approximation this whole file exists to refuse.
   const reached = new Set<string>()
   for (const entry of entries) {
-    for (const path of await reachableFrom(resolve(root, entry))) {
-      reached.add(relative(root, path))
+    for (const path of await reachableFrom(resolve(consumer.installed, entry))) {
+      reached.add(relative(consumer.installed, path))
     }
   }
 
@@ -271,3 +314,11 @@ test('the README the tarball carries names every entry point it ships', async ()
     expect(readme).toContain(`@zabaca/claude-code-agent-sdk-ui/${name.slice(2)}`)
   }
 }, 180_000)
+
+test("packing the tarball leaves the package's own dist/ exactly as it found it", () => {
+  // Two suites in one working tree used to fight over this path: `build:js`
+  // opens with `rm -rf dist`, and one run's deletion landed inside another's
+  // window. Every build in this suite now happens in a disposable copy, and
+  // this is the half of that which can fail.
+  expect(sharedDistState(), 'a build in this file wrote the shared dist/').toBe(distBefore)
+})

@@ -1,5 +1,13 @@
 import { expect, test } from 'bun:test'
+
+import { buildPackage } from '../../test/package-copy.ts'
 import { readdir } from 'node:fs/promises'
+import { sharedDistState } from '../../test/package-copy.ts'
+
+// Taken at import, before any `beforeAll` — so it is the state this file
+// inherited rather than one it made. See `sharedDistState` for why the
+// property is asserted here rather than in a guard of its own.
+const distBefore = sharedDistState()
 
 /**
  * The components under `src/ui/` are someone else's work, taken under MIT and
@@ -98,14 +106,27 @@ test('the LICENSE carries the Brainless notice', async () => {
 test('the shipped build carries the attribution too', async () => {
   // `dist/` is what a consumer receives, and `tsc` keeps leading comments — so
   // the provenance travels with the code rather than only with the sources.
-  // Built on demand: `dist/` is a build artefact and is not committed.
-  const built = `${root}/dist/ui/claude-prompt.js`
-  if (!(await Bun.file(built).exists())) {
-    const build = Bun.spawnSync(['bun', 'run', 'build:js'], { cwd: root })
-    if (build.exitCode !== 0) throw new Error(`build:js failed: ${build.stderr.toString()}`)
+  //
+  // Built in a **copy** of the package rather than in the tree. This used to
+  // build into the tree's `dist/` and cache on its existence, which made it
+  // both a reader and a writer of a path two other helpers also wrote — and
+  // `build:js` opens with `rm -rf dist`, so this test was the suite's own
+  // deletion, firing into any second run that happened to be packing. See
+  // `test/package-copy.ts`.
+  const copy = buildPackage('attribution')
+  try {
+    const shipped = await Bun.file(`${copy.dir}/dist/ui/claude-prompt.js`).text()
+    expect(shipped).toContain('Vendored from Brainless')
+    expect(shipped).toContain(UPSTREAM)
+  } finally {
+    copy.remove()
   }
-
-  const shipped = await Bun.file(built).text()
-  expect(shipped).toContain('Vendored from Brainless')
-  expect(shipped).toContain(UPSTREAM)
 }, 120_000)
+
+test("building the JavaScript leaves the package's own dist/ exactly as it found it", () => {
+  // Two suites in one working tree used to fight over this path: `build:js`
+  // opens with `rm -rf dist`, and one run's deletion landed inside another's
+  // window. Every build in this suite now happens in a disposable copy, and
+  // this is the half of that which can fail.
+  expect(sharedDistState(), 'a build in this file wrote the shared dist/').toBe(distBefore)
+})
