@@ -101,12 +101,12 @@ test('prose still being written is on screen before its Frame exists', async () 
 
   await act(async () => {
     fake.frame({ kind: 'prompt', text: 'say hi' })
-    fake.partial({ block: 0, kind: 'text', text: 'Hel' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Hel' })
   })
   expect(screen.getByText('Hel')).toBeDefined()
 
   await act(async () => {
-    fake.partial({ block: 0, kind: 'text', text: 'Hello there' })
+    fake.partial({ block: 0, message: 1, kind: 'text', text: 'Hello there' })
   })
   // Replace, never append: the handler sends the whole block each time.
   expect(there(screen.queryByText('Hel'))).toBe(false)
@@ -662,7 +662,7 @@ test('deliberation is off the screen by default, and on it only when asked for',
     // Live and retained alike. Streaming deliberation into the Transcript would
     // put the model's reasoning on screen as though it were an answer, which is
     // a product decision nobody made.
-    fake.partial({ block: 0, kind: 'reasoning', text: 'Maybe not, let me check' })
+    fake.partial({ block: 0, message: 1, kind: 'reasoning', text: 'Maybe not, let me check' })
     fake.frame({ kind: 'reasoning', text: 'Maybe not, let me check the caller' })
     fake.frame({ kind: 'text', text: 'It is safe.' })
   })

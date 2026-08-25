@@ -65,9 +65,9 @@ test('deltas stream live but the retained log holds coalesced whole Messages', a
     'frame',
   ])
   expect(events.slice(1, 4).map((event) => event.data)).toEqual([
-    { block: 0, kind: 'text', text: 'Hel' },
-    { block: 0, kind: 'text', text: 'Hello' },
-    { block: 0, kind: 'text', text: 'Hello', done: true },
+    { block: 0, message: 1, kind: 'text', text: 'Hel' },
+    { block: 0, message: 1, kind: 'text', text: 'Hello' },
+    { block: 0, message: 1, kind: 'text', text: 'Hello', done: true },
   ])
   // Partials carry no `id:`, so they never move the browser's resume cursor.
   expect(events.slice(1, 4).map((event) => event.id)).toEqual([undefined, undefined, undefined])
@@ -82,6 +82,98 @@ test('deltas stream live but the retained log holds coalesced whole Messages', a
     'settled',
     'cost',
   ])
+})
+
+test('a block says which Message it is in, so two Messages never share one', async () => {
+  // The index alone is not an identity that lasts: the SDK numbers blocks from
+  // 0 within each Message, so the second Message's first block is `0` again —
+  // and by then the first Message's block 0 has settled into a Frame. Without
+  // the Message on the wire the browser sees one identity, and has to choose
+  // between bringing a settled block back and refusing a block that is really
+  // being written. Both are on screen; neither is acceptable.
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('two messages please'))
+
+  fake.say(startsMessage())
+  fake.say(startsBlock(0, 'text'))
+  fake.say(delta(0, 'First.'))
+  fake.say(stopsBlock(0))
+  fake.say(says('First.'))
+  fake.say(startsMessage())
+  fake.say(startsBlock(0, 'text'))
+  fake.say(delta(0, 'Second.'))
+
+  const events = await read(stream, 5)
+  const partials = events.filter((event) => event.name === 'partial').map((event) => event.data)
+
+  expect(partials).toEqual([
+    { block: 0, message: 1, kind: 'text', text: 'First.' },
+    { block: 0, message: 1, kind: 'text', text: 'First.', done: true },
+    { block: 0, message: 2, kind: 'text', text: 'Second.' },
+  ])
+})
+
+test("a Thread counts its own Messages, not the ones it is running inside", async () => {
+  // A sub-agent's `message_start` arrives on the same stream as the agent's
+  // own, interleaved with it. Counted once for the whole Session, the Thread's
+  // first Message would take whatever number the agent had reached — so the
+  // ordinal would say more about how much the agent had said than about the
+  // Thread, and would move underneath a Thread's block for reasons that have
+  // nothing to do with the Thread. Each Thread counts its own, which is the
+  // same rule the Thread half of the identity already follows.
+  const fake = fakeQuery()
+  const handler = createAgentHandler({ createQuery: fake.createQuery })
+
+  const stream = await handler(open())
+  await handler(prompt('delegate it'))
+
+  fake.say(startsMessage())
+  fake.say(startsBlock(0, 'text'))
+  fake.say(delta(0, 'Main'))
+  fake.say(startsMessage('call-1'))
+  fake.say(startsBlock(0, 'text', 'call-1'))
+  fake.say(delta(0, 'Sub', 'call-1'))
+
+  const events = await read(stream, 3)
+  const partials = events.filter((event) => event.name === 'partial').map((event) => event.data)
+
+  expect(partials).toEqual([
+    { block: 0, message: 1, kind: 'text', text: 'Main' },
+    // The Thread's first Message, not the agent's second.
+    { block: 0, message: 1, kind: 'text', text: 'Sub', thread: 'call-1' },
+  ])
+})
+
+test('Message ordinals continue past a restored log rather than starting again', async () => {
+  // The Session outlives the process — the host hands back a log and the Frame
+  // ids continue from it. A browser that outlived the process too is still
+  // holding the block identities it was given, and it treats an identity it has
+  // already retired as a block that must not come back. An ordinal restarting
+  // at 1 would hand it exactly one of those, and the prose would stop
+  // streaming: on screen only when its Frame lands.
+  const fake = fakeQuery()
+  const handler = createAgentHandler({
+    createQuery: fake.createQuery,
+    log: memoryLog([
+      { kind: 'prompt', text: 'earlier' },
+      { kind: 'text', text: 'said earlier' },
+    ]),
+  })
+
+  const stream = await handler(open())
+  await handler(prompt('carry on'))
+
+  fake.say(startsMessage())
+  fake.say(startsBlock(0, 'text'))
+  fake.say(delta(0, 'Again'))
+
+  const events = await read(stream, 4)
+  const partials = events.filter((event) => event.name === 'partial').map((event) => event.data)
+
+  expect(partials).toEqual([{ block: 0, message: 3, kind: 'text', text: 'Again' }])
 })
 
 test('a dropped connection resumes from Last-Event-ID', async () => {
@@ -916,20 +1008,30 @@ function streamEvent(event: Record<string, unknown>, thread: string | null = nul
   return { type: 'stream_event', parent_tool_use_id: thread, event }
 }
 
-function startsMessage(): ClassifyInput {
-  return streamEvent({ type: 'message_start', message: { role: 'assistant', content: [] } })
+function startsMessage(thread: string | null = null): ClassifyInput {
+  return streamEvent({ type: 'message_start', message: { role: 'assistant', content: [] } }, thread)
 }
 
-function startsBlock(index: number, type: 'text' | 'thinking'): ClassifyInput {
-  return streamEvent({ type: 'content_block_start', index, content_block: { type, text: '' } })
+function startsBlock(
+  index: number,
+  type: 'text' | 'thinking',
+  thread: string | null = null,
+): ClassifyInput {
+  return streamEvent(
+    { type: 'content_block_start', index, content_block: { type, text: '' } },
+    thread,
+  )
 }
 
-function delta(index: number, text: string): ClassifyInput {
-  return streamEvent({
-    type: 'content_block_delta',
-    index,
-    delta: { type: 'text_delta', text },
-  })
+function delta(index: number, text: string, thread: string | null = null): ClassifyInput {
+  return streamEvent(
+    {
+      type: 'content_block_delta',
+      index,
+      delta: { type: 'text_delta', text },
+    },
+    thread,
+  )
 }
 
 function stopsBlock(index: number): ClassifyInput {
