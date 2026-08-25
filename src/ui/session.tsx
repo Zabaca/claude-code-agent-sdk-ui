@@ -98,6 +98,7 @@ export function ClaudeSession({
   /** Dismissed by esc, and only until the words change. */
   const [dismissed, setDismissed] = React.useState(false)
   const [highlighted, setHighlighted] = React.useState(0)
+  const box = React.useRef<HTMLDivElement>(null)
   const { transcript } = session
   const working = transcript.turn.status === 'working'
   const opened = useThreads(transcript, clock)
@@ -113,6 +114,44 @@ export function ClaudeSession({
   const offered = dismissed ? [] : matching(transcript.commands, text)
   const active = offered.length === 0 ? 0 : Math.min(highlighted, offered.length - 1)
 
+  // Kept current without re-binding the listener below: `session` is a fresh
+  // object every render, and `working` changes per token, so a listener keyed
+  // on either would be torn down and rebuilt on every frame of a Turn.
+  const interrupting = React.useRef(session.interrupt)
+  React.useEffect(() => {
+    interrupting.current = session.interrupt
+  })
+
+  // The working line says "esc to interrupt", so esc must interrupt — and from
+  // anywhere, which is why this is bound to the document rather than to the
+  // Session's own element.
+  //
+  // A React handler on the container only ever sees keys that bubble *up out
+  // of* something inside it. That covers hands on the composer and hands on an
+  // expanded tool line, and misses the case the line is actually read in: a
+  // reader watching the agent write, having clicked nothing, with focus still
+  // on the document where the page load left it. There the key never entered
+  // the Session at all, and the line went on promising an interrupt that no
+  // longer happened.
+  //
+  // Only while a Turn is running: an interrupt willed against an idle Session
+  // is a request nobody made. Bound to the container's own document, so a
+  // Session rendered into a portal or a frame listens where it actually lives.
+  // A menu open over the Turn still takes esc first and stops it there — see
+  // the composer's own handler — so dismissing a palette never reaches this.
+  React.useEffect(() => {
+    if (!working) return
+    const doc = box.current?.ownerDocument
+    if (!doc) return
+    const listener = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      interrupting.current()
+    }
+    doc.addEventListener('keydown', listener)
+    return () => doc.removeEventListener('keydown', listener)
+  }, [working])
+
   const say = (words: string) => {
     edit({ type: 'typed', text: words })
     setDismissed(false)
@@ -121,22 +160,12 @@ export function ClaudeSession({
 
   return (
     <div
+      ref={box}
       className={cn(
         'cc:flex cc:min-w-0 cc:flex-col cc:gap-3 cc:font-mono cc:text-[13px]',
         className,
       )}
       style={{ color: 'var(--cc-fg)' }}
-      onKeyDown={(event) => {
-        // The working line says "esc to interrupt", so esc must interrupt —
-        // and from anywhere in the Session, not only from the input, because
-        // that is where a person's hands are after expanding a tool call.
-        //
-        // Only while a Turn is running: an interrupt willed against an idle
-        // Session is a request nobody made.
-        if (event.key !== 'Escape' || !working) return
-        event.preventDefault()
-        session.interrupt()
-      }}
     >
       {header}
 

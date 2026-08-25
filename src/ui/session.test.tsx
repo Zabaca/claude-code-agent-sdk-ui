@@ -584,6 +584,28 @@ test('esc interrupts from anywhere in the Session, not only from the input', asy
   view.unmount()
 })
 
+test('esc interrupts with nothing in the Session focused', async () => {
+  const fake = fakeSse()
+  const wire = recorder()
+  const view = await mount(fake, { fetch: wire.fetch })
+
+  await act(async () => {
+    fake.frame({ kind: 'prompt', text: 'write a novel' })
+  })
+
+  // Nobody has clicked anything, so focus is still the document's — which is
+  // where it sits after a page load, and where it goes back to the moment a
+  // reader clicks the Transcript's own text. A handler that waits for the
+  // event to bubble up out of the Session never sees this one at all, and the
+  // working line goes on claiming esc will interrupt while esc does nothing.
+  await act(async () => {
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+  })
+
+  expect(wire.posted).toEqual([{ body: { type: 'interrupt' } }])
+  view.unmount()
+})
+
 test('the working line is on screen only while the Turn runs', async () => {
   const fake = fakeSse()
   const view = await mount(fake)
