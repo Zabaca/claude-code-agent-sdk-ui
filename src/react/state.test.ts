@@ -536,6 +536,24 @@ test('the next Message opens block 0 again, and it still streams', () => {
   expect(state.live).toHaveLength(1)
 })
 
+test('a Turn that ended takes its unfinished blocks with it, and keeps them', () => {
+  // The handler retains no Frame for a block the runtime never closed, so a
+  // reload would not show it and neither does this — that half already held.
+  // The half that did not: whatever closes the block afterwards arrives on a
+  // Turn that is over, and putting the block back then draws prose below the
+  // outcome of the Turn that was writing it.
+  let state = initial()
+  state = stream(state, { block: 0, message: 1, kind: 'text', text: 'Once upon' })
+  state = arrive(state, 0, { kind: 'settled', terminalReason: 'aborted_streaming' })
+
+  expect(saidIn(transcriptOf(state, false))).toEqual([])
+
+  state = stream(state, { block: 0, message: 1, kind: 'text', text: 'Once upon a', done: true })
+
+  expect(saidIn(transcriptOf(state, false))).toEqual([])
+  expect(state.live).toEqual([])
+})
+
 test('a connection that drops mid-block leaves no half-written copy, then or later', () => {
   // What `retire` exists for, and why it does not wait to be told the block
   // closed: the `partial` that says so carries no `id:`, so a reconnect never
